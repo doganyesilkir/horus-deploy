@@ -1,0 +1,58 @@
+{
+  "version": "1.0.0-rc.4",
+  "git_revision": "c660d543f7a4bcfe884dd6f76b59a19f704d6553",
+  "build_date": "2026-10-12T00:10:28Z",
+  "repository": "docker.io/doganyesilkir/horus",
+  "backend": {
+    "image": "docker.io/doganyesilkir/horus",
+    "tag": "backend-1.0.0-rc.4",
+    "digest": "sha256:0e829da6d2a55446995c67898eb3bce16e2c269f52c24a2cce7942d97b5c9a23",
+    "reference": "docker.io/doganyesilkir/horus:backend-1.0.0-rc.4@sha256:0e829da6d2a55446995c67898eb3bce16e2c269f52c24a2cce7942d97b5c9a23",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  },
+  "frontend": {
+    "image": "docker.io/doganyesilkir/horus",
+    "tag": "frontend-1.0.0-rc.4",
+    "digest": "sha256:eb710252723bbc514ff6447ec07273e702eac2a9677a59cbcfdc3f0e16364679",
+    "reference": "docker.io/doganyesilkir/horus:frontend-1.0.0-rc.4@sha256:eb710252723bbc514ff6447ec07273e702eac2a9677a59cbcfdc3f0e16364679",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  },
+  "agent": [
+    {
+      "file": "horus-agent-1.0.0-rc.4-linux-amd64",
+      "arch": "amd64",
+      "version": "1.0.0-rc.4",
+      "sha256": "4f3096e096593d978ca8d77ac520fc8ba4fa9f617b1f3e177b868b8e98636e3d",
+      "size": 6617840
+    },
+    {
+      "file": "horus-agent-1.0.0-rc.4-linux-arm64",
+      "arch": "arm64",
+      "version": "1.0.0-rc.4",
+      "sha256": "09635c841aac262ca9b4309793944550ec45396ae4742378a90e1b0fd890e7a7",
+      "size": 6294128
+    }
+  ],
+  "sbom": {
+    "format": "CycloneDX",
+    "files": [
+      "horus-backend-1.0.0-rc.4-linux-amd64.cdx.json",
+      "horus-backend-1.0.0-rc.4-linux-arm64.cdx.json",
+      "horus-frontend-1.0.0-rc.4-linux-amd64.cdx.json",
+      "horus-frontend-1.0.0-rc.4-linux-arm64.cdx.json"
+    ],
+    "attestation": "cosign attest --type cyclonedx (verify: cosign verify-attestation --type cyclonedx)"
+  },
+  "signature": {
+    "tool": "cosign",
+    "mode": "keyless (GitHub Actions OIDC)",
+    "oidc_issuer": "https://token.actions.githubusercontent.com",
+    "identity": "^https://github\\.com/doganyesilkir/Horus/\\.github/workflows/release\\.yml@refs/tags/v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-rc\\.[1-9][0-9]*)?$"
+  }
+}

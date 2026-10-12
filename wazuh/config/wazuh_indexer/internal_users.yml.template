@@ -1,0 +1,18 @@
+# Wazuh indexer internal users - TEMPLATE. scripts/wazuh-init.sh writes internal_users.yml next to this file with
+# bcrypt hashes of WAZUH_INDEXER_PASSWORD (admin) and WAZUH_DASHBOARD_PASSWORD (kibanaserver) from .env.
+# No published default password is ever used.
+_meta:
+  type: "internalusers"
+  config_version: 2
+
+admin:
+  hash: "__ADMIN_HASH__"
+  reserved: true
+  backend_roles:
+    - "admin"
+  description: "Admin user"
+
+kibanaserver:
+  hash: "__KIBANASERVER_HASH__"
+  reserved: true
+  description: "Wazuh dashboard user"

@@ -1,0 +1,493 @@
+# =============================================================================
+# Horus - production deployment (pre-built, signed images; no source code needed)
+#
+#   cp .env.example .env        # fill in HORUS_IMAGE, HORUS_VERSION, HORUS_ADMIN_PASSWORD, HORUS_DOMAIN
+#   ./scripts/install.sh        # preflight + pull + start + health verification
+#
+# With the bundled Wazuh stack:  docker compose -f docker-compose.wazuh.yml up -d   (see README)
+#
+# Exposure: only nginx publishes ports (HTTPS 443, HTTP 80 -> redirect). PostgreSQL, Redis, the API, Prometheus
+# and Loki stay on internal Docker networks. Every container runs non-root (except the one-shot secret init, which
+# has no network), with all Linux capabilities dropped, no-new-privileges and a read-only root filesystem.
+# =============================================================================
+name: horus
+
+x-hardened: &hardened
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+# One private Docker Hub repository holds both images (multi-arch: linux/amd64 + linux/arm64):
+#   ${HORUS_IMAGE}:backend-${HORUS_VERSION}    api, worker, worker-periodic, beat (same image, different command)
+#   ${HORUS_IMAGE}:frontend-${HORUS_VERSION}   web UI
+# HORUS_BACKEND_DIGEST / HORUS_FRONTEND_DIGEST (optional, from release-manifest.json) pin the exact image.
+x-backend-image: &backend-image
+  image: ${HORUS_IMAGE:?set HORUS_IMAGE in .env (<dockerhub_username>/horus)}:backend-${HORUS_VERSION:?set HORUS_VERSION in .env (exact release, e.g. 1.0.0)}${HORUS_BACKEND_DIGEST:+@${HORUS_BACKEND_DIGEST}}
+  pull_policy: missing
+
+x-backend-env: &backend-env
+  HORUS_ENV: production
+  HORUS_LOG_LEVEL: ${HORUS_LOG_LEVEL:-INFO}
+  HORUS_SECRETS_DIR: /run/horus-secrets
+  HORUS_COOKIE_SECURE: ${HORUS_COOKIE_SECURE:-auto}
+  HORUS_ADMIN_USERNAME: ${HORUS_ADMIN_USERNAME:-admin}
+  HORUS_ADMIN_EMAIL: ${HORUS_ADMIN_EMAIL:-admin@horus.local}
+  HORUS_ADMIN_PASSWORD: ${HORUS_ADMIN_PASSWORD:-}
+  HORUS_OPERATION_MODE: ${HORUS_OPERATION_MODE:-APPROVAL}
+  HORUS_ALLOW_SELF_APPROVAL: ${HORUS_ALLOW_SELF_APPROVAL:-true}
+  HORUS_PRODUCTION_REQUIRED_APPROVALS: ${HORUS_PRODUCTION_REQUIRED_APPROVALS:-2}
+  HORUS_JOB_TIMEOUT_SECONDS: ${HORUS_JOB_TIMEOUT_SECONDS:-1800}
+  HORUS_IP_WHITELIST: ${HORUS_IP_WHITELIST:-127.0.0.1/32}
+  HORUS_FORWARDED_ALLOW_IPS: ${HORUS_FORWARDED_ALLOW_IPS:-}
+  HORUS_SCHEDULE_TIMEZONE: ${HORUS_SCHEDULE_TIMEZONE:-UTC}
+  HORUS_SERVICE_STATUS_INTERVAL_SECONDS: ${HORUS_SERVICE_STATUS_INTERVAL_SECONDS:-60}
+  HORUS_LOKI_URL: http://loki:3100
+  HORUS_FALCO_INGEST_URL: ${HORUS_FALCO_INGEST_URL:-}
+  HORUS_FIREWALL_ROLLBACK_TIMEOUT: ${HORUS_FIREWALL_ROLLBACK_TIMEOUT:-120}
+  HORUS_DEFAULT_LANGUAGE: ${HORUS_DEFAULT_LANGUAGE:-tr}
+  HORUS_PASSWORD_MIN_LENGTH: ${HORUS_PASSWORD_MIN_LENGTH:-12}
+  HORUS_PASSWORD_REQUIRE_UPPER: ${HORUS_PASSWORD_REQUIRE_UPPER:-true}
+  HORUS_PASSWORD_REQUIRE_LOWER: ${HORUS_PASSWORD_REQUIRE_LOWER:-true}
+  HORUS_PASSWORD_REQUIRE_DIGIT: ${HORUS_PASSWORD_REQUIRE_DIGIT:-true}
+  HORUS_PASSWORD_REQUIRE_SPECIAL: ${HORUS_PASSWORD_REQUIRE_SPECIAL:-true}
+  HORUS_PASSWORD_CHANGE_MAX_ATTEMPTS: ${HORUS_PASSWORD_CHANGE_MAX_ATTEMPTS:-5}
+  # *_FULL variables are only set by docker-compose.wazuh.yml (wazuh/wazuh.env)
+  HORUS_WAZUH_ENABLED: ${HORUS_WAZUH_ENABLED_FULL:-${HORUS_WAZUH_ENABLED:-false}}
+  HORUS_WAZUH_API_URL: ${HORUS_WAZUH_API_URL_FULL:-${HORUS_WAZUH_API_URL:-https://wazuh.manager:55000}}
+  HORUS_WAZUH_API_USER: ${HORUS_WAZUH_API_USER:-wazuh-wui}
+  HORUS_WAZUH_API_PASSWORD: ${HORUS_WAZUH_API_PASSWORD:-${WAZUH_API_PASSWORD:-}}
+  HORUS_WAZUH_INDEXER_URL: ${HORUS_WAZUH_INDEXER_URL_FULL:-${HORUS_WAZUH_INDEXER_URL:-https://wazuh.indexer:9200}}
+  HORUS_WAZUH_INDEXER_USER: ${HORUS_WAZUH_INDEXER_USER:-admin}
+  HORUS_WAZUH_INDEXER_PASSWORD: ${HORUS_WAZUH_INDEXER_PASSWORD:-${WAZUH_INDEXER_PASSWORD:-}}
+  HORUS_WAZUH_VERIFY_TLS: ${HORUS_WAZUH_VERIFY_TLS:-true}
+  HORUS_WAZUH_CA_BUNDLE: ${HORUS_WAZUH_CA_BUNDLE:-}
+  HORUS_SECRET_BACKEND: ${HORUS_SECRET_BACKEND:-database}
+  HORUS_VAULT_ADDR: ${HORUS_VAULT_ADDR:-}
+  HORUS_VAULT_TOKEN_FILE: ${HORUS_VAULT_TOKEN_FILE:-}
+  HORUS_VAULT_MOUNT: ${HORUS_VAULT_MOUNT:-secret}
+  HORUS_VAULT_PREFIX: ${HORUS_VAULT_PREFIX:-horus}
+  HORUS_VAULT_NAMESPACE: ${HORUS_VAULT_NAMESPACE:-}
+  HORUS_VAULT_VERIFY_TLS: ${HORUS_VAULT_VERIFY_TLS:-true}
+  POSTGRES_HOST: postgres
+  POSTGRES_DB: horus
+  POSTGRES_USER: horus
+  REDIS_HOST: redis
+
+# backend containers: policies are shipped inside the image; ./policies only holds customer overrides
+x-backend-volumes: &backend-volumes
+  - horus_secrets:/run/horus-secrets:ro
+  - ./policies:/app/policy-overrides:ro
+
+services:
+  # ---------------------------------------------------------------------------
+  # One-shot: generates missing secrets into the horus_secrets volume (no network)
+  # ---------------------------------------------------------------------------
+  horus-init:
+    image: alpine:3.24.2
+    container_name: horus-init
+    restart: "no"
+    command: ["/bin/sh", "/init-secrets.sh"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    network_mode: none
+    environment:
+      HORUS_MASTER_KEY: ${HORUS_MASTER_KEY:-}
+      HORUS_JWT_SECRET: ${HORUS_JWT_SECRET:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      GRAFANA_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      HORUS_INGEST_TOKEN: ${HORUS_INGEST_TOKEN:-}
+    volumes:
+      - ./scripts/init-secrets.sh:/init-secrets.sh:ro
+      - horus_secrets:/secrets
+
+  postgres:
+    <<: *hardened
+    image: postgres:16.15-alpine
+    container_name: horus-postgres
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    environment:
+      POSTGRES_DB: horus
+      POSTGRES_USER: horus
+      POSTGRES_PASSWORD_FILE: /run/horus-secrets/postgres_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - horus_secrets:/run/horus-secrets:ro
+    # internal only - never published on the host
+    networks: [data_network]
+    depends_on:
+      horus-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U horus -d horus"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits: {cpus: "2.0", memory: 1g}
+
+  redis:
+    <<: *hardened
+    image: redis:7.4.11-alpine
+    container_name: horus-redis
+    user: "999:1000"
+    read_only: true
+    command: ["redis-server", "/run/horus-secrets/redis.conf"]
+    volumes:
+      - redis_data:/data
+      - horus_secrets:/run/horus-secrets:ro
+    # internal only - never published on the host
+    networks: [data_network]
+    depends_on:
+      horus-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$(cat /run/horus-secrets/redis_password)\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512m}
+
+  api:
+    <<: [*hardened, *backend-image]
+    container_name: horus-api
+    command: ["api"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    environment:
+      <<: *backend-env
+      HORUS_SERVICE: api
+    volumes: *backend-volumes
+    # not published: reachable only through nginx. egress_network: inline "Test connection" of external
+    # integrations (Wazuh, GLPI, MISP ...) from the Integrations page
+    networks: [frontend_network, backend_network, data_network, monitoring_network, egress_network]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "horus-healthcheck", "api"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+    deploy:
+      resources:
+        limits: {cpus: "2.0", memory: 1g}
+
+  worker:
+    <<: [*hardened, *backend-image]
+    container_name: horus-worker
+    command: ["worker"]
+    read_only: true
+    tmpfs:
+      # SSH keys are only ever materialised here (memory backed, 0700 dirs)
+      - /tmp:size=512m,mode=1777
+    environment:
+      <<: *backend-env
+      HORUS_SERVICE: worker
+      HORUS_WORKER_CONCURRENCY: ${HORUS_WORKER_CONCURRENCY:-4}
+      HORUS_WORKER_QUEUES: automation,live
+    volumes: *backend-volumes
+    # egress_network: outbound SSH to managed Linux hosts / integrations
+    networks: [backend_network, data_network, monitoring_network, egress_network]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "horus-healthcheck", "worker"]
+      interval: 30s
+      timeout: 15s
+      start_period: 40s
+      retries: 5
+    deploy:
+      resources:
+        limits: {cpus: "${HORUS_WORKER_CPUS:-2.0}", memory: 2g}
+
+  worker-periodic:
+    <<: [*hardened, *backend-image]
+    container_name: horus-worker-periodic
+    command: ["worker"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    environment:
+      <<: *backend-env
+      HORUS_SERVICE: worker-periodic
+      HORUS_WORKER_CONCURRENCY: ${HORUS_PERIODIC_WORKER_CONCURRENCY:-2}
+      HORUS_WORKER_QUEUES: default,live
+      HORUS_WORKER_NAME: periodic
+    volumes: *backend-volumes
+    networks: [backend_network, data_network, monitoring_network, egress_network]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "horus-healthcheck", "worker"]
+      interval: 30s
+      timeout: 15s
+      start_period: 40s
+      retries: 5
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 768m}
+
+  beat:
+    <<: [*hardened, *backend-image]
+    container_name: horus-beat
+    command: ["beat"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      <<: *backend-env
+      HORUS_SERVICE: beat
+      HORUS_BEAT_SCHEDULE: /var/lib/horus-beat/celerybeat-schedule
+    volumes:
+      - horus_secrets:/run/horus-secrets:ro
+      - horus_beat:/var/lib/horus-beat
+    networks: [backend_network, data_network, monitoring_network]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "horus-healthcheck", "beat"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256m}
+
+  frontend:
+    <<: *hardened
+    image: ${HORUS_IMAGE:?set HORUS_IMAGE in .env}:frontend-${HORUS_VERSION:?set HORUS_VERSION in .env}${HORUS_FRONTEND_DIGEST:+@${HORUS_FRONTEND_DIGEST}}
+    pull_policy: missing
+    container_name: horus-frontend
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+      - /app/.next/cache:size=64m,uid=1001,gid=1001
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+    networks: [frontend_network]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512m}
+
+  nginx:
+    <<: *hardened
+    image: nginxinc/nginx-unprivileged:1.28.2-alpine
+    container_name: horus-nginx
+    read_only: true
+    ulimits:
+      nofile: {soft: 8192, hard: 8192}
+    tmpfs:
+      - /tmp
+    ports:
+      # HORUS_PROXY_MODE=https (default): 443 serves Horus, 80 only redirects to HTTPS.
+      # HORUS_PROXY_MODE=http-dev: plain HTTP on 80 - development / isolated labs only.
+      - "${HORUS_BIND_ADDRESS:-0.0.0.0}:${HORUS_HTTPS_PORT:-443}:8443"
+      - "${HORUS_BIND_ADDRESS:-0.0.0.0}:${HORUS_HTTP_PORT:-80}:8080"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/sites/${HORUS_PROXY_MODE:-https}:/etc/nginx/conf.d:ro
+      - ./nginx/common:/etc/nginx/common:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    networks: [edge_network, frontend_network, monitoring_network]
+    depends_on:
+      api: {condition: service_healthy}
+      frontend: {condition: service_healthy}
+      # soft: Grafana being down must never keep the platform offline
+      grafana: {condition: service_started, required: false}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/nginx-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 256m}
+
+  prometheus:
+    <<: *hardened
+    image: prom/prometheus:v2.55.1
+    container_name: horus-prometheus
+    read_only: true
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    # internal only (Grafana reads it); not proxied by nginx
+    networks: [monitoring_network]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 1g}
+
+  loki:
+    <<: *hardened
+    image: grafana/loki:3.7.8
+    container_name: horus-loki
+    user: "10001:10001"
+    read_only: true
+    command: ["-config.file=/etc/loki/loki.yml"]
+    tmpfs:
+      - /tmp
+    volumes:
+      - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    networks: [monitoring_network]
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 1g}
+
+  grafana:
+    <<: *hardened
+    image: grafana/grafana:11.6.16
+    container_name: horus-grafana
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/horus-secrets/grafana_admin_password
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED: "true"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_SECURITY_COOKIE_SECURE: "${HORUS_GRAFANA_COOKIE_SECURE:-true}"
+      GF_SECURITY_COOKIE_SAMESITE: strict
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/horus-overview.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+      - horus_secrets:/run/horus-secrets:ro
+    networks: [monitoring_network]
+    depends_on:
+      horus-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512m}
+
+  # ---------------------------------------------------------------------------
+  # Optional local Falco (runtime security of the Docker host itself)
+  #   docker compose --profile falco up -d falco
+  # Least privilege for the modern eBPF engine: CAP_BPF + CAP_PERFMON, CAP_SYS_RESOURCE (ring buffer memlock),
+  # CAP_SYS_PTRACE (read /host/proc). Not privileged, no Docker socket, no host network / PID namespace.
+  # ---------------------------------------------------------------------------
+  falco:
+    profiles: ["falco"]
+    image: falcosecurity/falco:0.45.0
+    container_name: horus-falco
+    hostname: ${HORUS_FALCO_HOSTNAME:-horus-docker-host}
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/horus/entrypoint.sh"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [BPF, PERFMON, SYS_RESOURCE, SYS_PTRACE]
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      HORUS_API_URL: http://api:8000
+    volumes:
+      - /proc:/host/proc:ro
+      - ./falco/entrypoint.sh:/horus/entrypoint.sh:ro
+      - ./falco/config.d/horus-local.yaml:/etc/falco/config.d/horus-local.yaml:ro
+      - ./falco/rules/horus_rules.yaml:/etc/falco/rules.d/horus_rules.yaml:ro
+      - horus_secrets:/run/horus-secrets:ro
+    networks: [backend_network]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8765/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512m}
+
+networks:
+  # nginx <-> frontend / API
+  frontend_network:
+    name: horus_frontend_network
+    internal: true
+  # API / workers / beat / Falco (internal)
+  backend_network:
+    name: horus_backend_network
+    internal: true
+  # PostgreSQL + Redis (internal, only backend services attached)
+  data_network:
+    name: horus_data_network
+    internal: true
+  # metrics + logs (internal)
+  monitoring_network:
+    name: horus_monitoring_network
+    internal: true
+  # outbound SSH to managed hosts / integrations (workers, API connection tests)
+  egress_network:
+    name: horus_egress_network
+  # published ports of nginx (the only container reachable from outside)
+  edge_network:
+    name: horus_edge_network
+
+volumes:
+  horus_secrets:
+    name: horus_secrets
+  horus_beat:
+    name: horus_beat_data
+  postgres_data:
+    name: horus_postgres_data
+  redis_data:
+    name: horus_redis_data
+  prometheus_data:
+    name: horus_prometheus_data
+  loki_data:
+    name: horus_loki_data
+  grafana_data:
+    name: horus_grafana_data

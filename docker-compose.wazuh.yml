@@ -1,0 +1,184 @@
+# =============================================================================
+# Horus + bundled single-node Wazuh (optional)
+#   ./scripts/wazuh-init.sh                      # once: password hashes for the indexer users (from .env)
+#   docker compose -f docker-compose.wazuh.yml up -d
+# Horus keeps working without Wazuh: the plain docker-compose.yml never references it.
+#
+# Host requirements (Wazuh indexer / OpenSearch):
+#   sudo sysctl -w vm.max_map_count=262144      (persist in /etc/sysctl.conf)
+#   >= 8 GB RAM for the whole stack, x86_64 host (Wazuh images are amd64 only)
+# WAZUH_INDEXER_PASSWORD, WAZUH_API_PASSWORD and WAZUH_DASHBOARD_PASSWORD are required (fail fast).
+# =============================================================================
+name: horus
+
+include:
+  # the second file attaches the API to wazuh_network (see the file for the data flow)
+  - path: [docker-compose.yml, wazuh/horus-network.compose.yml]
+    # later files win: wazuh.env enables the integration
+    env_file: [.env, wazuh/wazuh.env]
+
+x-wazuh-common: &wazuh-common
+  restart: unless-stopped
+  platform: linux/amd64
+  logging:
+    driver: json-file
+    options: {max-size: "20m", max-file: "5"}
+
+services:
+  # One-shot certificate generator (skips when certificates already exist)
+  wazuh-certs:
+    <<: *wazuh-common
+    image: wazuh/wazuh-certs-generator:0.0.2
+    container_name: wazuh-certs
+    restart: "no"
+    hostname: wazuh-certs-generator
+    entrypoint: ["/bin/bash", "-c", "if [ -f /certificates/root-ca.pem ]; then echo 'certificates exist'; else /entrypoint.sh; fi"]
+    volumes:
+      - ./wazuh/config/certs.yml:/config/certs.yml:ro
+      - ./wazuh/certs:/certificates/
+
+  wazuh-indexer:
+    <<: *wazuh-common
+    image: wazuh/wazuh-indexer:4.9.2
+    container_name: wazuh-indexer
+    hostname: wazuh.indexer
+    environment:
+      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+    ulimits:
+      memlock: {soft: -1, hard: -1}
+      nofile: {soft: 65536, hard: 65536}
+    volumes:
+      - wazuh_indexer_data:/var/lib/wazuh-indexer
+      - ./wazuh/certs/root-ca.pem:/usr/share/wazuh-indexer/certs/root-ca.pem:ro
+      - ./wazuh/certs/wazuh.indexer-key.pem:/usr/share/wazuh-indexer/certs/wazuh.indexer.key:ro
+      - ./wazuh/certs/wazuh.indexer.pem:/usr/share/wazuh-indexer/certs/wazuh.indexer.pem:ro
+      - ./wazuh/certs/admin.pem:/usr/share/wazuh-indexer/certs/admin.pem:ro
+      - ./wazuh/certs/admin-key.pem:/usr/share/wazuh-indexer/certs/admin-key.pem:ro
+      - ./wazuh/config/wazuh_indexer/wazuh.indexer.yml:/usr/share/wazuh-indexer/opensearch.yml:ro
+      - ./wazuh/config/wazuh_indexer/internal_users.yml:/usr/share/wazuh-indexer/opensearch-security/internal_users.yml:ro
+    networks:
+      wazuh_network:
+        aliases: [wazuh.indexer]
+      egress_network:
+        aliases: [wazuh.indexer]
+    depends_on:
+      wazuh-certs: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sk -o /dev/null -w '%{http_code}' https://localhost:9200 | grep -qE '200|401'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 10
+    deploy:
+      resources:
+        limits: {memory: 2g}
+
+  # The image's init skips an empty mounted volume, so a fresh wazuh_var_multigroups volume stays root:root and
+  # wazuh-remoted (uid 999) cannot create multigroup directories ("Permission denied"): agents assigned to more than
+  # one group never receive their merged configuration. Give the volume the ownership a regular install has.
+  wazuh-volume-perms:
+    image: alpine:3.24.2
+    container_name: wazuh-volume-perms
+    restart: "no"
+    user: "0"
+    command: ["/bin/sh", "-c", "chown 999:999 /multigroups && chmod 0770 /multigroups"]
+    volumes:
+      - wazuh_var_multigroups:/multigroups
+    network_mode: none
+
+  wazuh-manager:
+    <<: *wazuh-common
+    image: wazuh/wazuh-manager:4.9.2
+    container_name: wazuh-manager
+    hostname: wazuh.manager
+    ports:
+      # agent enrollment / events - agents on your Linux servers connect here
+      - "${HORUS_BIND_ADDRESS:-0.0.0.0}:1514:1514"
+      - "${HORUS_BIND_ADDRESS:-0.0.0.0}:1515:1515"
+    environment:
+      INDEXER_URL: https://wazuh.indexer:9200
+      INDEXER_USERNAME: ${HORUS_WAZUH_INDEXER_USER:-admin}
+      INDEXER_PASSWORD: ${WAZUH_INDEXER_PASSWORD:?set WAZUH_INDEXER_PASSWORD in .env (README: Wazuh) - no published default is used}
+      FILEBEAT_SSL_VERIFICATION_MODE: full
+      SSL_CERTIFICATE_AUTHORITIES: /etc/ssl/root-ca.pem
+      SSL_CERTIFICATE: /etc/ssl/filebeat.pem
+      SSL_KEY: /etc/ssl/filebeat.key
+      API_USERNAME: ${HORUS_WAZUH_API_USER:-wazuh-wui}
+      API_PASSWORD: ${WAZUH_API_PASSWORD:?set WAZUH_API_PASSWORD in .env (README: Wazuh) - no published default is used}
+    volumes:
+      - wazuh_api_configuration:/var/ossec/api/configuration
+      - wazuh_etc:/var/ossec/etc
+      - wazuh_logs:/var/ossec/logs
+      - wazuh_queue:/var/ossec/queue
+      - wazuh_var_multigroups:/var/ossec/var/multigroups
+      - wazuh_integrations:/var/ossec/integrations
+      - wazuh_active_response:/var/ossec/active-response/bin
+      - wazuh_agentless:/var/ossec/agentless
+      - wazuh_wodles:/var/ossec/wodles
+      - filebeat_etc:/etc/filebeat
+      - filebeat_var:/var/lib/filebeat
+      - ./wazuh/certs/root-ca-manager.pem:/etc/ssl/root-ca.pem:ro
+      - ./wazuh/certs/wazuh.manager.pem:/etc/ssl/filebeat.pem:ro
+      - ./wazuh/certs/wazuh.manager-key.pem:/etc/ssl/filebeat.key:ro
+      - ./wazuh/config/wazuh_cluster/wazuh_manager.conf:/wazuh-config-mount/etc/ossec.conf:ro
+    networks:
+      wazuh_network:
+        aliases: [wazuh.manager]
+      egress_network:
+        aliases: [wazuh.manager]
+    depends_on:
+      wazuh-indexer: {condition: service_started}
+      wazuh-volume-perms: {condition: service_completed_successfully}
+    deploy:
+      resources:
+        limits: {memory: 2g}
+
+  wazuh-dashboard:
+    <<: *wazuh-common
+    image: wazuh/wazuh-dashboard:4.9.2
+    container_name: wazuh-dashboard
+    hostname: wazuh.dashboard
+    ports:
+      # loopback by default (SSH tunnel / reverse proxy); WAZUH_DASHBOARD_BIND=0.0.0.0 publishes it deliberately
+      - "${WAZUH_DASHBOARD_BIND:-127.0.0.1}:${WAZUH_DASHBOARD_PORT:-8443}:5601"
+    environment:
+      INDEXER_USERNAME: ${HORUS_WAZUH_INDEXER_USER:-admin}
+      INDEXER_PASSWORD: ${WAZUH_INDEXER_PASSWORD:?set WAZUH_INDEXER_PASSWORD in .env (README: Wazuh) - no published default is used}
+      WAZUH_API_URL: https://wazuh.manager
+      DASHBOARD_USERNAME: kibanaserver
+      DASHBOARD_PASSWORD: ${WAZUH_DASHBOARD_PASSWORD:?set WAZUH_DASHBOARD_PASSWORD in .env (README: Wazuh) - no published default is used}
+      API_USERNAME: ${HORUS_WAZUH_API_USER:-wazuh-wui}
+      API_PASSWORD: ${WAZUH_API_PASSWORD:?set WAZUH_API_PASSWORD in .env (README: Wazuh) - no published default is used}
+    volumes:
+      - ./wazuh/certs/wazuh.dashboard.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard.pem:ro
+      - ./wazuh/certs/wazuh.dashboard-key.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard-key.pem:ro
+      - ./wazuh/certs/root-ca.pem:/usr/share/wazuh-dashboard/certs/root-ca.pem:ro
+      - ./wazuh/config/wazuh_dashboard/opensearch_dashboards.yml:/usr/share/wazuh-dashboard/config/opensearch_dashboards.yml:ro
+      # wazuh.yml (the dashboard's Wazuh API connection) is written by the image on first start from API_USERNAME /
+      # API_PASSWORD into this volume - no API password in a tracked file (the former bind mount carried the published
+      # default and broke the dashboard once WAZUH_API_PASSWORD was set)
+      - wazuh_dashboard_config:/usr/share/wazuh-dashboard/data/wazuh/config
+      - wazuh_dashboard_custom:/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom
+    networks:
+      wazuh_network:
+        aliases: [wazuh.dashboard]
+    depends_on:
+      wazuh-indexer: {condition: service_started}
+
+# wazuh_network (name horus_wazuh_network) is declared in wazuh/horus-network.compose.yml.
+
+volumes:
+  wazuh_api_configuration:
+  wazuh_etc:
+  wazuh_logs:
+  wazuh_queue:
+  wazuh_var_multigroups:
+  wazuh_integrations:
+  wazuh_active_response:
+  wazuh_agentless:
+  wazuh_wodles:
+  filebeat_etc:
+  filebeat_var:
+  wazuh_indexer_data:
+  wazuh_dashboard_config:
+  wazuh_dashboard_custom:

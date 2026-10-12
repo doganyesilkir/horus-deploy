@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+backups/
+.horus-deployments
+nginx/certs/*.pem
+nginx/certs/*.key
+wazuh/certs/
+wazuh/config/wazuh_indexer/internal_users.yml

@@ -1,0 +1,24 @@
+# Horus local Falco (docker compose --profile falco). The ingest URL (with the
+# token read from the secrets volume) is built by entrypoint.sh at start-up and
+# passed via the HORUS_FALCO_HTTP_URL environment variable.
+json_output: true
+json_include_output_property: true
+json_include_tags_property: true
+json_include_output_fields_property: true
+time_format_iso_8601: true
+http_output:
+  enabled: true
+  url: ${HORUS_FALCO_HTTP_URL}
+  user_agent: "horus-falco"
+  keep_alive: true
+metrics:
+  enabled: true
+  interval: 5m
+  output_rule: true
+  resource_utilization_enabled: false
+  state_counters_enabled: false
+  libbpf_stats_enabled: false
+  plugins_metrics_enabled: false
+webserver:
+  enabled: true
+  listen_port: 8765

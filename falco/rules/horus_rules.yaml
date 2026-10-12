@@ -1,0 +1,245 @@
+# horus-rules-version: 1.0.0
+# -----------------------------------------------------------------------------
+# Horus custom Falco detections. Loaded AFTER /etc/falco/falco_rules.yaml and
+# built on its macros/lists. Conditions are intentionally narrow to keep false
+# positives low; tune with *_exceptions lists below instead of widening them.
+# -----------------------------------------------------------------------------
+
+- list: horus_web_server_binaries
+  items: [nginx, apache2, httpd, lighttpd, caddy, tomcat, node, gunicorn, uwsgi]
+
+- macro: horus_web_parent
+  condition: >
+    (proc.pname in (horus_web_server_binaries) or proc.pname startswith "php-fpm"
+     or proc.aname[2] in (horus_web_server_binaries) or proc.aname[2] startswith "php-fpm")
+
+- list: horus_netcat_binaries
+  items: [nc, ncat, netcat, nc.traditional, nc.openbsd]
+
+- list: horus_network_scanner_binaries
+  items: [nmap, masscan, zmap, hping3]
+
+- list: horus_miner_binaries
+  items: [xmrig, xmr-stak, minerd, cpuminer, cgminer, bfgminer, ethminer, t-rex, nbminer, lolminer]
+
+- list: horus_account_files
+  items: [/etc/passwd, /etc/shadow, /etc/group, /etc/gshadow]
+
+- list: horus_sudoers_files
+  items: [/etc/sudoers]
+
+- list: horus_sshd_files
+  items: [/etc/ssh/sshd_config]
+
+- list: horus_system_binary_dirs
+  items: [/bin, /sbin, /usr/bin, /usr/sbin, /usr/local/bin, /usr/local/sbin]
+
+# Add the process names of your configuration management here (not Horus: Horus
+# changes are correlated with its own jobs in the event detail)
+- list: horus_config_mgmt_binaries
+  items: [puppet, chef-client, salt-minion]
+
+- macro: horus_pkg_or_cm
+  condition: (run_by_package_mgmt_binaries or proc.name in (package_mgmt_binaries) or proc.name in (horus_config_mgmt_binaries))
+
+- macro: horus_write_or_rename
+  condition: >
+    ((evt.type in (open, openat, openat2) and evt.is_open_write=true and fd.typechar='f')
+     or evt.type in (rename, renameat, renameat2))
+
+# --- web shells ----------------------------------------------------------------
+
+- rule: Shell spawned by web server
+  desc: A shell was started by a web server process (typical web shell / RCE exploitation).
+  condition: spawned_process and shell_procs and (proc.pname in (horus_web_server_binaries) or proc.aname[2] in (horus_web_server_binaries))
+  output: >-
+    Shell spawned by web server | shell=%proc.name cmdline=%proc.cmdline parent=%proc.pname pcmdline=%proc.pcmdline
+    gparent=%proc.aname[2] ggparent=%proc.aname[3] user=%user.name uid=%user.uid cwd=%proc.cwd tty=%proc.tty
+    exe=%proc.exepath container_id=%container.id container_name=%container.name image=%container.image.repository
+  priority: CRITICAL
+  tags: [horus, web_shell, execution, mitre_execution, T1505.003]
+
+- rule: Shell spawned by php-fpm
+  desc: A shell was started by PHP-FPM (web application command execution).
+  condition: spawned_process and shell_procs and (proc.pname startswith "php-fpm" or proc.aname[2] startswith "php-fpm")
+  output: >-
+    Shell spawned by php-fpm | shell=%proc.name cmdline=%proc.cmdline parent=%proc.pname pcmdline=%proc.pcmdline
+    gparent=%proc.aname[2] user=%user.name uid=%user.uid cwd=%proc.cwd exe=%proc.exepath
+    container_id=%container.id container_name=%container.name
+  priority: CRITICAL
+  tags: [horus, web_shell, execution, mitre_execution, T1505.003]
+
+- rule: Unexpected shell inside container
+  desc: An interactive shell (attached TTY) started inside a container.
+  condition: >
+    spawned_process and container and shell_procs and proc.tty != 0
+    and not proc.pname in (shell_binaries) and not user_expected_terminal_shell_in_container_conditions
+  output: >-
+    Interactive shell inside container | shell=%proc.name cmdline=%proc.cmdline parent=%proc.pname user=%user.name
+    uid=%user.uid tty=%proc.tty container_id=%container.id container_name=%container.name image=%container.image.repository
+  priority: WARNING
+  tags: [horus, container, shell, mitre_execution, T1059]
+
+# --- account / privilege files --------------------------------------------------
+
+- rule: Modification of account database
+  desc: /etc/passwd, /etc/shadow, /etc/group or /etc/gshadow written by something other than the account tools.
+  condition: >
+    horus_write_or_rename and (fd.name in (horus_account_files) or fs.path.target in (horus_account_files))
+    and not proc.name in (passwd_binaries, shadowutils_binaries, user_mgmt_binaries) and not horus_pkg_or_cm
+    and not proc.name in (systemd-sysusers, systemd-userdbd)
+  output: >-
+    Account database modified | file=%fd.name target=%fs.path.target process=%proc.name cmdline=%proc.cmdline
+    parent=%proc.pname user=%user.name uid=%user.uid exe=%proc.exepath container_id=%container.id
+    container_name=%container.name
+  priority: CRITICAL
+  tags: [horus, persistence, credential_access, mitre_persistence, T1098]
+
+- rule: Modification of sudoers
+  desc: /etc/sudoers or /etc/sudoers.d written (new privilege grant).
+  condition: >
+    horus_write_or_rename
+    and (fd.name in (horus_sudoers_files) or fd.name startswith /etc/sudoers.d/
+         or fs.path.target in (horus_sudoers_files) or fs.path.target startswith /etc/sudoers.d/)
+    and not horus_pkg_or_cm
+  output: >-
+    sudoers modified | file=%fd.name target=%fs.path.target process=%proc.name cmdline=%proc.cmdline
+    parent=%proc.pname user=%user.name uid=%user.uid container_id=%container.id
+  priority: CRITICAL
+  tags: [horus, privilege_escalation, mitre_privilege_escalation, T1548.003]
+
+- rule: Modification of sshd_config
+  desc: SSH daemon configuration changed.
+  condition: >
+    horus_write_or_rename
+    and (fd.name in (horus_sshd_files) or fd.name startswith /etc/ssh/sshd_config.d/
+         or fs.path.target in (horus_sshd_files) or fs.path.target startswith /etc/ssh/sshd_config.d/)
+    and not horus_pkg_or_cm
+  output: >-
+    sshd configuration modified | file=%fd.name target=%fs.path.target process=%proc.name cmdline=%proc.cmdline
+    parent=%proc.pname user=%user.name uid=%user.uid
+  priority: WARNING
+  tags: [horus, persistence, ssh, mitre_persistence, T1098.004]
+
+- rule: Sensitive file access by web server
+  desc: A web server or PHP-FPM process opened a credential file (/etc/shadow, /etc/sudoers, ...).
+  condition: open_read and sensitive_files and (proc.name in (horus_web_server_binaries) or proc.name startswith "php-fpm" or horus_web_parent)
+  output: >-
+    Sensitive file read by web server | file=%fd.name process=%proc.name cmdline=%proc.cmdline parent=%proc.pname
+    user=%user.name uid=%user.uid container_id=%container.id container_name=%container.name
+  priority: CRITICAL
+  tags: [horus, credential_access, mitre_credential_access, T1003.008]
+
+# --- tools / reverse shells ------------------------------------------------------
+
+- rule: Suspicious curl/wget execution
+  desc: curl or wget started by a web server, or downloading into /tmp or /dev/shm.
+  condition: >
+    spawned_process and proc.name in (curl, wget) and not horus_pkg_or_cm
+    and (horus_web_parent or proc.args contains "/dev/shm" or proc.args contains " /tmp/" or proc.args contains "-O /tmp"
+         or proc.args contains "-o /tmp")
+  output: >-
+    Suspicious download tool execution | process=%proc.name cmdline=%proc.cmdline parent=%proc.pname
+    gparent=%proc.aname[2] user=%user.name uid=%user.uid cwd=%proc.cwd container_id=%container.id
+  priority: WARNING
+  tags: [horus, command_and_control, ingress_tool_transfer, mitre_command_and_control, T1105]
+
+- rule: Netcat execution
+  desc: A netcat binary was executed.
+  condition: spawned_process and proc.name in (horus_netcat_binaries)
+  output: >-
+    Netcat executed | cmdline=%proc.cmdline parent=%proc.pname user=%user.name uid=%user.uid container_id=%container.id
+  priority: NOTICE
+  tags: [horus, network_tool, mitre_command_and_control, T1095]
+
+- rule: Socat execution
+  desc: socat was executed.
+  condition: spawned_process and proc.name = socat
+  output: >-
+    socat executed | cmdline=%proc.cmdline parent=%proc.pname user=%user.name uid=%user.uid container_id=%container.id
+  priority: NOTICE
+  tags: [horus, network_tool, mitre_command_and_control, T1095]
+
+- rule: Reverse shell indicator
+  desc: >
+    netcat/socat started with a command-execution option, or a shell whose stdin/stdout was redirected to a
+    network socket.
+  condition: >
+    (spawned_process and proc.name in (horus_netcat_binaries) and (proc.args contains "-e" or proc.args contains "-c "))
+    or (spawned_process and proc.name = socat and (proc.args icontains "exec:" or proc.args icontains "system:"))
+    or (dup and evt.rawres in (0, 1, 2) and fd.type in ("ipv4", "ipv6") and shell_procs)
+  output: >-
+    Reverse shell indicator | process=%proc.name cmdline=%proc.cmdline parent=%proc.pname connection=%fd.name
+    user=%user.name uid=%user.uid container_id=%container.id container_name=%container.name
+  priority: CRITICAL
+  tags: [horus, reverse_shell, execution, mitre_execution, T1059]
+
+- rule: Outbound connection from shell
+  desc: A shell process itself opened an outbound network connection (e.g. /dev/tcp reverse shells).
+  condition: outbound and shell_procs and not horus_pkg_or_cm
+  output: >-
+    Shell opened outbound connection | process=%proc.name cmdline=%proc.cmdline connection=%fd.name parent=%proc.pname
+    user=%user.name uid=%user.uid container_id=%container.id
+  priority: WARNING
+  tags: [horus, network, command_and_control, mitre_command_and_control, T1071]
+
+- rule: Suspicious network tool execution
+  desc: A network scanner was executed.
+  condition: spawned_process and proc.name in (horus_network_scanner_binaries)
+  output: >-
+    Network scanner executed | cmdline=%proc.cmdline parent=%proc.pname user=%user.name uid=%user.uid
+    container_id=%container.id
+  priority: NOTICE
+  tags: [horus, discovery, mitre_discovery, T1046]
+
+- rule: Crypto miner execution
+  desc: A known cryptocurrency miner or a stratum mining pool URL on the command line.
+  condition: spawned_process and (proc.name in (horus_miner_binaries) or proc.cmdline contains "stratum+tcp://" or proc.cmdline contains "stratum+ssl://")
+  output: >-
+    Crypto miner executed | process=%proc.name cmdline=%proc.cmdline parent=%proc.pname user=%user.name
+    uid=%user.uid container_id=%container.id container_name=%container.name
+  priority: CRITICAL
+  tags: [horus, cryptomining, impact, mitre_impact, T1496]
+
+- rule: Package manager execution in container
+  desc: A package manager ran inside a running container (images should be immutable).
+  condition: spawned_process and container and proc.name in (package_mgmt_binaries) and not proc.pname in (package_mgmt_binaries)
+  output: >-
+    Package manager executed in container | cmdline=%proc.cmdline parent=%proc.pname user=%user.name
+    container_id=%container.id container_name=%container.name image=%container.image.repository
+  priority: NOTICE
+  tags: [horus, container, persistence, mitre_persistence, T1072]
+
+# --- privilege escalation / tampering ------------------------------------------------
+
+- rule: Privilege escalation from web server
+  desc: sudo, su or pkexec started below a web server process.
+  condition: spawned_process and proc.name in (sudo, su, pkexec) and horus_web_parent
+  output: >-
+    Privilege escalation attempt from web server | process=%proc.name cmdline=%proc.cmdline parent=%proc.pname
+    gparent=%proc.aname[2] user=%user.name uid=%user.uid container_id=%container.id
+  priority: CRITICAL
+  tags: [horus, privilege_escalation, mitre_privilege_escalation, T1548]
+
+- rule: Unexpected chmod +s
+  desc: The setuid or setgid bit was set on a file outside package management.
+  condition: >
+    evt.type in (chmod, fchmod, fchmodat) and evt.res >= 0
+    and (evt.arg.mode contains "S_ISUID" or evt.arg.mode contains "S_ISGID") and not horus_pkg_or_cm
+  output: >-
+    setuid/setgid bit set | file=%evt.arg.filename mode=%evt.arg.mode process=%proc.name cmdline=%proc.cmdline
+    parent=%proc.pname user=%user.name uid=%user.uid container_id=%container.id
+  priority: WARNING
+  tags: [horus, privilege_escalation, persistence, mitre_privilege_escalation, T1548.001]
+
+- rule: System binary modification
+  desc: A file in a system binary directory was written outside package management.
+  condition: >
+    horus_write_or_rename
+    and (fd.directory in (horus_system_binary_dirs) or fs.path.target pmatch (horus_system_binary_dirs))
+    and not horus_pkg_or_cm and not proc.name in (dpkg, rpm, snapd, systemd-tmpfiles)
+  output: >-
+    System binary modified | file=%fd.name target=%fs.path.target process=%proc.name cmdline=%proc.cmdline
+    parent=%proc.pname user=%user.name uid=%user.uid container_id=%container.id
+  priority: ERROR
+  tags: [horus, defense_evasion, persistence, mitre_persistence, T1554]

@@ -1,0 +1,10 @@
+# Copy to policies/baselines/customer-app-server.yaml and assign it to servers in the UI.
+name: customer-app-server
+display_name: Application server (custom)
+description: Internal application server with an HTTPS endpoint on 8443.
+extends: linux-default
+kind: profile
+firewall:
+  allowed_tcp_ports: [22, 8443]
+certificates:
+  tls_ports: [8443]

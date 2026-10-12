@@ -1,0 +1,29 @@
+# =============================================================================
+# Horus <-> Wazuh network attachment (full deployment only)
+#
+# Merged over docker-compose.yml by the `include` in docker-compose.full.yml, so the
+# minimal deployment (`docker compose up -d`) never references a Wazuh network.
+#
+# Who needs to reach Wazuh directly:
+#   api    - runs integration connection tests inline (Integrations -> Test connection)
+#            against wazuh.manager:55000 / wazuh.indexer:9200 -> wazuh_network
+#   worker - polls alerts and syncs vulnerabilities; already reaches wazuh.manager /
+#            wazuh.indexer through egress_network (aliases on the Wazuh services)
+#   beat   - only schedules tasks, never connects -> no Wazuh network
+# =============================================================================
+services:
+  api:
+    # the base networks are repeated on purpose: the API must keep postgres/redis/frontend access
+    networks: [frontend_network, backend_network, data_network, monitoring_network, egress_network, wazuh_network]
+    # The bundled Wazuh is only reached over these internal Docker networks and its manager API serves a certificate
+    # it generates itself (not signed by wazuh/certs). TLS verification is therefore explicitly off for THIS bundled
+    # instance only; an external Wazuh is verified by default (HORUS_WAZUH_VERIFY_TLS / HORUS_WAZUH_CA_BUNDLE).
+    environment: {HORUS_WAZUH_VERIFY_TLS: "false"}
+  worker:
+    environment: {HORUS_WAZUH_VERIFY_TLS: "false"}
+  worker-periodic:
+    environment: {HORUS_WAZUH_VERIFY_TLS: "false"}
+
+networks:
+  wazuh_network:
+    name: horus_wazuh_network

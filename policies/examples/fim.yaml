@@ -1,0 +1,9 @@
+# Copy to policies/fim/fim.yaml. Lists replace the shipped list: include every path you want monitored.
+scan_interval_hours: 12
+paths:
+  - {path: /etc/ssh, category: ssh, severity: high, recursive: true}
+  - {path: /etc/sudoers, category: sudoers, severity: critical}
+  - {path: /etc/sudoers.d, category: sudoers, severity: critical, recursive: true}
+  - {path: /etc/passwd, category: auth, severity: high}
+  - {path: /etc/shadow, category: auth, severity: high}
+  - {path: /opt/myapp/config, category: config, severity: high, recursive: true}

@@ -1,0 +1,4 @@
+# Copy to policies/scoring/default.yaml. Only the listed weights change; all others keep the shipped values.
+weights:
+  vulnerabilities: 25
+  exposure: 15

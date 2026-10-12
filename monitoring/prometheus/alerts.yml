@@ -1,0 +1,43 @@
+groups:
+  - name: horus
+    rules:
+      - alert: HorusApiDown
+        expr: up{job="horus-api"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: Horus API is not reachable by Prometheus
+      - alert: HorusWorkerDown
+        expr: up{job="horus-worker"} == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: Horus worker metrics endpoint is down (automation will not run)
+      - alert: HorusLowSecurityScore
+        expr: horus_security_score < 40
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.hostname }} security score is {{ $value }}"
+      - alert: HorusCriticalVulnerabilities
+        expr: sum(horus_vulnerabilities_total{severity="critical",status="open"}) > 0
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value }} open critical vulnerabilities"
+      - alert: HorusAutomationFailures
+        expr: increase(horus_worker_jobs_processed_total{status="failed"}[1h]) > 5
+        labels: {severity: warning}
+        annotations:
+          summary: More than 5 automation jobs failed in the last hour
+      - alert: HorusFalcoAgentsOffline
+        expr: horus_falco_assets_offline > 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value }} asset(s) with Falco stopped or not reporting"
+      - alert: HorusCriticalRuntimeEvents
+        expr: increase(horus_falco_critical_events_total[15m]) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: New critical Falco runtime events
