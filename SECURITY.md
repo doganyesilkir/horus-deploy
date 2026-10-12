@@ -1,5 +1,7 @@
 # Security
 
+English | [Türkçe](SECURITY.tr.md)
+
 ## Reporting a vulnerability
 
 Report suspected vulnerabilities privately to your Horus support contact. Do not open public issues for security
