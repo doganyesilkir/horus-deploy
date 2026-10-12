@@ -671,8 +671,9 @@ See also [SECURITY.md](SECURITY.md).
 ## Screenshots
 
 > [!NOTE]
-> The images below are placeholders until screenshots of the release are added. To add one, save the screenshot
-> under the same file name in [`docs/images/`](docs/images/) - see [docs/images/README.md](docs/images/README.md).
+> The screenshots below were taken from a running Horus installation with lab servers (English UI, dark theme). To
+> replace one, save the new screenshot under the same file name in [`docs/images/`](docs/images/) - see
+> [docs/images/README.md](docs/images/README.md).
 
 <p align="center">
   <img src="docs/images/dashboard.png" alt="Dashboard" width="100%"><br>

@@ -689,9 +689,9 @@ Ayrıca bkz. [SECURITY.tr.md](SECURITY.tr.md).
 ## Ekran görüntüleri
 
 > [!NOTE]
-> Aşağıdaki görseller, sürümün ekran görüntüleri eklenene kadar yer tutucudur. Bir görsel eklemek için ekran
-> görüntüsünü [`docs/images/`](docs/images/) altına aynı dosya adıyla kaydedin - bkz.
-> [docs/images/README.md](docs/images/README.md).
+> Aşağıdaki ekran görüntüleri, lab sunucularıyla çalışan bir Horus kurulumundan alınmıştır (İngilizce arayüz, koyu
+> tema). Bir görseli değiştirmek için yeni ekran görüntüsünü [`docs/images/`](docs/images/) altına aynı dosya adıyla
+> kaydedin - bkz. [docs/images/README.md](docs/images/README.md).
 
 <p align="center">
   <img src="docs/images/dashboard.png" alt="Gösterge paneli" width="100%"><br>
