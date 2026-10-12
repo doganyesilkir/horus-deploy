@@ -1,13 +1,13 @@
 {
-  "version": "1.0.0-rc.4",
-  "git_revision": "c660d543f7a4bcfe884dd6f76b59a19f704d6553",
-  "build_date": "2026-10-12T00:10:28Z",
+  "version": "1.0.0-rc.5",
+  "git_revision": "8958533399ee21b04fd1085aa0240bbac945755f",
+  "build_date": "2026-10-12T14:30:54Z",
   "repository": "docker.io/doganyesilkir/horus",
   "backend": {
     "image": "docker.io/doganyesilkir/horus",
-    "tag": "backend-1.0.0-rc.4",
-    "digest": "sha256:0e829da6d2a55446995c67898eb3bce16e2c269f52c24a2cce7942d97b5c9a23",
-    "reference": "docker.io/doganyesilkir/horus:backend-1.0.0-rc.4@sha256:0e829da6d2a55446995c67898eb3bce16e2c269f52c24a2cce7942d97b5c9a23",
+    "tag": "backend-1.0.0-rc.5",
+    "digest": "sha256:4084106ea013b783f2c3f3caf8cf79f313bdc803109f271f0ce16bae4d3e20ad",
+    "reference": "docker.io/doganyesilkir/horus:backend-1.0.0-rc.5@sha256:4084106ea013b783f2c3f3caf8cf79f313bdc803109f271f0ce16bae4d3e20ad",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
@@ -15,9 +15,9 @@
   },
   "frontend": {
     "image": "docker.io/doganyesilkir/horus",
-    "tag": "frontend-1.0.0-rc.4",
-    "digest": "sha256:eb710252723bbc514ff6447ec07273e702eac2a9677a59cbcfdc3f0e16364679",
-    "reference": "docker.io/doganyesilkir/horus:frontend-1.0.0-rc.4@sha256:eb710252723bbc514ff6447ec07273e702eac2a9677a59cbcfdc3f0e16364679",
+    "tag": "frontend-1.0.0-rc.5",
+    "digest": "sha256:492e52c1254f22d465c05f4b867d0f7207bda3ff32ed5a41f80d9d8d26a1aa1c",
+    "reference": "docker.io/doganyesilkir/horus:frontend-1.0.0-rc.5@sha256:492e52c1254f22d465c05f4b867d0f7207bda3ff32ed5a41f80d9d8d26a1aa1c",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
@@ -25,27 +25,27 @@
   },
   "agent": [
     {
-      "file": "horus-agent-1.0.0-rc.4-linux-amd64",
+      "file": "horus-agent-1.0.0-rc.5-linux-amd64",
       "arch": "amd64",
-      "version": "1.0.0-rc.4",
-      "sha256": "4f3096e096593d978ca8d77ac520fc8ba4fa9f617b1f3e177b868b8e98636e3d",
+      "version": "1.0.0-rc.5",
+      "sha256": "b067652dfc9e12c929c7e861e9d2064cbab021238a1d9651c28657168c6ad411",
       "size": 6617840
     },
     {
-      "file": "horus-agent-1.0.0-rc.4-linux-arm64",
+      "file": "horus-agent-1.0.0-rc.5-linux-arm64",
       "arch": "arm64",
-      "version": "1.0.0-rc.4",
-      "sha256": "09635c841aac262ca9b4309793944550ec45396ae4742378a90e1b0fd890e7a7",
+      "version": "1.0.0-rc.5",
+      "sha256": "bfe06e57abdec32df9c990552e1d6303e19f97af830a3ea7ccce0f0a03d9a853",
       "size": 6294128
     }
   ],
   "sbom": {
     "format": "CycloneDX",
     "files": [
-      "horus-backend-1.0.0-rc.4-linux-amd64.cdx.json",
-      "horus-backend-1.0.0-rc.4-linux-arm64.cdx.json",
-      "horus-frontend-1.0.0-rc.4-linux-amd64.cdx.json",
-      "horus-frontend-1.0.0-rc.4-linux-arm64.cdx.json"
+      "horus-backend-1.0.0-rc.5-linux-amd64.cdx.json",
+      "horus-backend-1.0.0-rc.5-linux-arm64.cdx.json",
+      "horus-frontend-1.0.0-rc.5-linux-amd64.cdx.json",
+      "horus-frontend-1.0.0-rc.5-linux-arm64.cdx.json"
     ],
     "attestation": "cosign attest --type cyclonedx (verify: cosign verify-attestation --type cyclonedx)"
   },
