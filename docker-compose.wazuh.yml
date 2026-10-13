@@ -98,13 +98,13 @@ services:
     environment:
       INDEXER_URL: https://wazuh.indexer:9200
       INDEXER_USERNAME: ${HORUS_WAZUH_INDEXER_USER:-admin}
-      INDEXER_PASSWORD: ${WAZUH_INDEXER_PASSWORD:?set WAZUH_INDEXER_PASSWORD in .env (README: Wazuh) - no published default is used}
+      INDEXER_PASSWORD: "${WAZUH_INDEXER_PASSWORD:?set WAZUH_INDEXER_PASSWORD in .env (README: Wazuh) - no published default is used}"
       FILEBEAT_SSL_VERIFICATION_MODE: full
       SSL_CERTIFICATE_AUTHORITIES: /etc/ssl/root-ca.pem
       SSL_CERTIFICATE: /etc/ssl/filebeat.pem
       SSL_KEY: /etc/ssl/filebeat.key
       API_USERNAME: ${HORUS_WAZUH_API_USER:-wazuh-wui}
-      API_PASSWORD: ${WAZUH_API_PASSWORD:?set WAZUH_API_PASSWORD in .env (README: Wazuh) - no published default is used}
+      API_PASSWORD: "${WAZUH_API_PASSWORD:?set WAZUH_API_PASSWORD in .env (README: Wazuh) - no published default is used}"
     volumes:
       - wazuh_api_configuration:/var/ossec/api/configuration
       - wazuh_etc:/var/ossec/etc
@@ -143,12 +143,12 @@ services:
       - "${WAZUH_DASHBOARD_BIND:-127.0.0.1}:${WAZUH_DASHBOARD_PORT:-8443}:5601"
     environment:
       INDEXER_USERNAME: ${HORUS_WAZUH_INDEXER_USER:-admin}
-      INDEXER_PASSWORD: ${WAZUH_INDEXER_PASSWORD:?set WAZUH_INDEXER_PASSWORD in .env (README: Wazuh) - no published default is used}
+      INDEXER_PASSWORD: "${WAZUH_INDEXER_PASSWORD:?set WAZUH_INDEXER_PASSWORD in .env (README: Wazuh) - no published default is used}"
       WAZUH_API_URL: https://wazuh.manager
       DASHBOARD_USERNAME: kibanaserver
-      DASHBOARD_PASSWORD: ${WAZUH_DASHBOARD_PASSWORD:?set WAZUH_DASHBOARD_PASSWORD in .env (README: Wazuh) - no published default is used}
+      DASHBOARD_PASSWORD: "${WAZUH_DASHBOARD_PASSWORD:?set WAZUH_DASHBOARD_PASSWORD in .env (README: Wazuh) - no published default is used}"
       API_USERNAME: ${HORUS_WAZUH_API_USER:-wazuh-wui}
-      API_PASSWORD: ${WAZUH_API_PASSWORD:?set WAZUH_API_PASSWORD in .env (README: Wazuh) - no published default is used}
+      API_PASSWORD: "${WAZUH_API_PASSWORD:?set WAZUH_API_PASSWORD in .env (README: Wazuh) - no published default is used}"
     volumes:
       - ./wazuh/certs/wazuh.dashboard.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard.pem:ro
       - ./wazuh/certs/wazuh.dashboard-key.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard-key.pem:ro
