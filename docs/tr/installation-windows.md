@@ -128,6 +128,6 @@ kombinasyon Horus sürüm hattında **test edilmez** - yalnızca değerlendirme 
 |---|---|
 | Horus web arayüzü, API, SSH üzerinden otomasyon | ✅ Çalışır |
 | Docker sunucusunda isteğe bağlı Falco (`--profile falco`) | ❌ eBPF destekli bir Linux sunucu kernel'i gerektirir |
-| Paketli Wazuh (`docker-compose.wazuh.yml`) | ⚠️ Önerilmez - yaklaşık 8 GB ek bellek ve WSL kernel'inde `vm.max_map_count` gerektirir |
+| Paketli Wazuh (`docker-compose.wazuh.yml`) | ⚠️ Test edilmedi - yaklaşık 8 GB ek bellek ve WSL kernel'inde `vm.max_map_count` gerektirir |
 | Harici Wazuh (Entegrasyonlar'da yapılandırılır) | ✅ Çalışır |
 | Native Windows container'ları | ❌ Desteklenmez |

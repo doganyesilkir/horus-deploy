@@ -73,9 +73,14 @@ docker compose logs --tail 200 <service>  # why?
 | Symptom | Cause and fix |
 |---|---|
 | `set WAZUH_..._PASSWORD in .env` | The bundled Wazuh needs all three passwords - no defaults exist |
-| `wazuh-indexer` exits | `vm.max_map_count` too low (`sudo sysctl -w vm.max_map_count=262144`) or not enough memory |
+| `image platform check failed for linux/<arch>` | An image lacks your host's platform, or the registry could not be read (the line says which). Log in (`docker login`), check the network, or use the deployment files of this release |
+| `exec format error` (e.g. `wazuh-certs`) | An image of the wrong architecture: Wazuh before 4.14.8 and certificate generator before 0.0.4 were amd64-only. Check out this release's deployment files and run `./scripts/install.sh --with-wazuh` |
+| `certificate ... was not created` (`wazuh-certs` exits 1) | The generator could not write to `wazuh/certs/` or download its tool from `packages.wazuh.com` (outbound HTTPS). Fix it, empty `wazuh/certs/` and start again |
+| `insufficient disk space for the Wazuh backup` | The Wazuh volumes (vulnerability content: several GB) do not fit into the backup directory. Free space, or run `./scripts/wazuh-backup.sh /path/with/space` first; Wazuh was not stopped |
+| `vm.max_map_count is ... on the Docker host` / `wazuh-indexer` exits | `sudo sysctl -w vm.max_map_count=262144`, or not enough memory (`WAZUH_INDEXER_JAVA_OPTS`) |
 | Indexer authentication fails | `./scripts/wazuh-init.sh` was not run, or the passwords changed afterwards - run it again before starting |
-| Bundled Wazuh on ARM64 / macOS | Not supported (x86_64-only images) - use an external Wazuh |
+| `bundled Wazuh is running: COMPOSE_FILE=... added` | Information: Wazuh had been started by hand with `-f docker-compose.wazuh.yml`; the scripts now keep Horus attached to it |
+| Bundled Wazuh under Docker Desktop (macOS / Windows) | Not tested - use a Linux host (x86_64 or ARM64) or an external Wazuh |
 | Test connection fails (external Wazuh) | URL/port, credentials, and TLS: keep verification on and set `HORUS_WAZUH_CA_BUNDLE` for a private CA |
 
 ## After an update or restore

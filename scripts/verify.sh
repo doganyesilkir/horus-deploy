@@ -33,10 +33,34 @@ code=$(curl -sk -o /dev/null -w '%{http_code}' "https://127.0.0.1:$https_port/me
        curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$http_port/metrics" || true)
 [ "$code" = 404 ] || [ "$code" = 301 ] && ok "/metrics not exposed" || bad "/metrics reachable through the proxy ($code)"
 
+# --- bundled Wazuh (COMPOSE_FILE=docker-compose.wazuh.yml) ---------------------------------------------------------
+# Authenticated checks from inside the containers; passwords travel as environment variables, never as arguments.
+if wazuh_enabled; then
+  # shellcheck disable=SC2016  # $WAZUH_PW is expanded inside the container
+  health=$(WAZUH_PW=$(env_get WAZUH_INDEXER_PASSWORD) $DC exec -T -e WAZUH_PW wazuh-indexer sh -c \
+    'curl -sk -u "admin:$WAZUH_PW" "https://localhost:9200/_cluster/health"' 2>/dev/null || true)
+  case "$health" in
+    *'"status":"green"'*|*'"status":"yellow"'*) ok "Wazuh indexer answers an authenticated query" ;;
+    *) bad "Wazuh indexer: authenticated cluster health failed" ;;
+  esac
+  api_user=$(env_get HORUS_WAZUH_API_USER); api_user=${api_user:-wazuh-wui}
+  # shellcheck disable=SC2016
+  code=$(WAZUH_PW=$(env_get WAZUH_API_PASSWORD) WAZUH_USER=$api_user $DC exec -T -e WAZUH_PW -e WAZUH_USER \
+    wazuh-manager sh -c 'curl -sk -o /dev/null -w "%{http_code}" -u "$WAZUH_USER:$WAZUH_PW" -X POST \
+    "https://localhost:55000/security/user/authenticate"' 2>/dev/null || true)
+  [ "$code" = 200 ] && ok "Wazuh manager API authentication ($api_user)" || bad "Wazuh manager API authentication ($code)"
+  code=$($DC exec -T wazuh-dashboard sh -c 'curl -sk -o /dev/null -w "%{http_code}" https://localhost:5601/api/status' \
+    2>/dev/null || true)
+  case "$code" in 200|401) ok "Wazuh dashboard is up" ;; *) bad "Wazuh dashboard returned $code" ;; esac
+fi
+
 # --- container hardening ------------------------------------------------------------------------------------------
+# Applies to the Horus services. The bundled Wazuh services run the official Wazuh images unchanged (their init
+# needs root and a writable filesystem; the manager publishes the agent ports 1514/1515) - they are listed, not failed.
 for cid in $($DC ps -q); do
   name=$(docker inspect -f '{{.Name}}' "$cid" | sed 's|^/||')
   svc=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$cid")
+  case "$svc" in wazuh-*) wazuh_svcs="${wazuh_svcs:-}${wazuh_svcs:+ }$svc"; continue ;; esac
   user=$(docker inspect -f '{{.Config.User}}' "$cid")
   case "$user" in ""|0|root|0:*|root:*) bad "$name runs as root" ;; esac
   [ "$(docker inspect -f '{{.HostConfig.Privileged}}' "$cid")" = false ] || bad "$name is privileged"
@@ -56,4 +80,5 @@ for cid in $($DC ps -q); do
   if [ -n "$ports" ] && [ "$svc" != nginx ]; then bad "$name publishes ports: $ports"; fi
 done
 [ "$fail" -eq 0 ] && ok "container hardening (non-root, read-only, no extra capabilities, only nginx published)"
+[ -z "${wazuh_svcs:-}" ] || ok "official Wazuh images, hardening checks not applied: $wazuh_svcs"
 exit "$fail"

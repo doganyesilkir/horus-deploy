@@ -101,7 +101,7 @@ Open `https://localhost/`, accept the self-signed certificate warning, sign in a
 |---|---|
 | Horus web UI, API, automation over SSH | ✅ Works |
 | Optional Falco on the Docker host (`--profile falco`) | ❌ Needs a Linux host kernel with eBPF |
-| Bundled Wazuh (`docker-compose.wazuh.yml`) | ❌ x86_64-only images; not supported under Docker Desktop |
+| Bundled Wazuh (`docker-compose.wazuh.yml`) | ⚠️ Multi-arch images, but not tested under Docker Desktop - use a Linux host |
 | External Wazuh (configured in Integrations) | ✅ Works |
 
 Managed Linux servers must be reachable over SSH from the Docker Desktop VM - which normally means from your Mac's

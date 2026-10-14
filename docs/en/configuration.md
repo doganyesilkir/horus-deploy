@@ -108,6 +108,8 @@ docker run --rm -v horus_secrets:/s:ro alpine:3.24.2 cat /s/grafana_admin_passwo
 | `HORUS_IP_WHITELIST` | `127.0.0.1/32` | IPs/CIDRs automation must never block - add your management networks |
 | `HORUS_SCHEDULE_TIMEZONE` | `UTC` | Time zone of new task schedules |
 | `HORUS_SERVICE_STATUS_INTERVAL_SECONDS` | `60` | Background refresh of service states |
+| `HORUS_MONITOR_CONCURRENCY` | `8` | Domain monitoring: checks running at the same time ([domain-monitoring.md](domain-monitoring.md)) |
+| `HORUS_MONITOR_RETENTION_DAYS` | `90` | Domain monitoring: days raw check results are kept |
 | `HORUS_FIREWALL_ROLLBACK_TIMEOUT` | `120` | Seconds before an unconfirmed firewall change is rolled back on the server |
 
 ## UI and password policy
@@ -143,6 +145,8 @@ Bundled Wazuh (`docker-compose.wazuh.yml`) - required, no defaults are ever used
 |---|---|
 | `WAZUH_INDEXER_PASSWORD`, `WAZUH_API_PASSWORD`, `WAZUH_DASHBOARD_PASSWORD` | 8-64 characters with upper case, lower case, digit and symbol |
 | `WAZUH_DASHBOARD_BIND`, `WAZUH_DASHBOARD_PORT` | Wazuh dashboard, `127.0.0.1:8443` by default |
+| `WAZUH_INDEXER_JAVA_OPTS` | Indexer heap, empty = `-Xms1g -Xmx1g` |
+| `COMPOSE_FILE` | Written by `install.sh --with-wazuh` (`docker-compose.wazuh.yml`); makes every Compose command include Wazuh |
 
 See [integrations.md](integrations.md#wazuh).
 

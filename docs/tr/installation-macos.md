@@ -101,7 +101,7 @@ yeni bir parola belirleyin.
 |---|---|
 | Horus web arayüzü, API, SSH üzerinden otomasyon | ✅ Çalışır |
 | Docker sunucusunda isteğe bağlı Falco (`--profile falco`) | ❌ eBPF destekli bir Linux sunucu kernel'i gerektirir |
-| Paketli Wazuh (`docker-compose.wazuh.yml`) | ❌ Yalnızca x86_64 imajları; Docker Desktop altında desteklenmez |
+| Paketli Wazuh (`docker-compose.wazuh.yml`) | ⚠️ Çok mimarili imajlar, ancak Docker Desktop altında test edilmedi - bir Linux sunucu kullanın |
 | Harici Wazuh (Entegrasyonlar'da yapılandırılır) | ✅ Çalışır |
 
 Yönetilen Linux sunucularına Docker Desktop sanal makinesinden SSH ile erişilebilmelidir - bu genellikle Mac'inizin

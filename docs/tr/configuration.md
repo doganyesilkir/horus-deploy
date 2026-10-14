@@ -108,6 +108,8 @@ docker run --rm -v horus_secrets:/s:ro alpine:3.24.2 cat /s/grafana_admin_passwo
 | `HORUS_IP_WHITELIST` | `127.0.0.1/32` | Otomasyonun asla engellememesi gereken IP/CIDR'ler - yönetim ağlarınızı ekleyin |
 | `HORUS_SCHEDULE_TIMEZONE` | `UTC` | Yeni görev zamanlamalarının saat dilimi |
 | `HORUS_SERVICE_STATUS_INTERVAL_SECONDS` | `60` | Servis durumlarının arka planda yenilenme aralığı |
+| `HORUS_MONITOR_CONCURRENCY` | `8` | Domain izleme: aynı anda çalışan kontrol sayısı ([domain-monitoring.md](domain-monitoring.md)) |
+| `HORUS_MONITOR_RETENTION_DAYS` | `90` | Domain izleme: ham kontrol sonuçlarının saklandığı gün |
 | `HORUS_FIREWALL_ROLLBACK_TIMEOUT` | `120` | Onaylanmamış bir firewall değişikliğinin sunucuda geri alınmasından önceki saniye |
 
 ## Arayüz ve parola politikası
@@ -143,6 +145,8 @@ Paketli Wazuh (`docker-compose.wazuh.yml`) - zorunludur, hiçbir zaman varsayıl
 |---|---|
 | `WAZUH_INDEXER_PASSWORD`, `WAZUH_API_PASSWORD`, `WAZUH_DASHBOARD_PASSWORD` | Büyük harf, küçük harf, rakam ve sembol içeren 8-64 karakter |
 | `WAZUH_DASHBOARD_BIND`, `WAZUH_DASHBOARD_PORT` | Wazuh dashboard'u, varsayılan olarak `127.0.0.1:8443` |
+| `WAZUH_INDEXER_JAVA_OPTS` | Indexer heap'i, boş = `-Xms1g -Xmx1g` |
+| `COMPOSE_FILE` | `install.sh --with-wazuh` tarafından yazılır (`docker-compose.wazuh.yml`); her Compose komutunun Wazuh'u kapsamasını sağlar |
 
 Bkz. [integrations.md](integrations.md#wazuh).
 

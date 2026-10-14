@@ -113,6 +113,139 @@ preflight() {
   $DC config --quiet || die "docker compose configuration is invalid"
 }
 
+# --- platform (CPU architecture) checks -----------------------------------------------------------------------
+# What matters is the platform of the Docker DAEMON that runs the containers - it can be a remote context or
+# DOCKER_HOST - never the uname of the machine running this script.
+docker_platform() {
+  p=$(docker version -f '{{.Server.Os}}/{{.Server.Arch}}' 2>/dev/null) \
+    || die "cannot reach the Docker daemon (docker version failed; check the Docker context / DOCKER_HOST)"
+  case "$p" in
+    linux/amd64|linux/arm64) printf '%s\n' "$p" ;;
+    */*) die "Docker host platform $p is not supported (Horus runs on linux/amd64 and linux/arm64)" ;;
+    *) die "cannot determine the Docker host platform" ;;
+  esac
+}
+
+# Registry lookup reference of an image: a digest-pinned name:tag@sha256:... becomes name@sha256:... (the tag is
+# removed from the last path segment only - a registry host:port stays). `docker manifest inspect` resolves
+# name:tag@digest by the TAG, so a pinned image whose tag does not exist (yet) - the release candidate checked before
+# promote creates backend-<v> / frontend-<v> - failed with "no such manifest", and a moved tag was checked instead of
+# the pinned digest. References without a digest are returned unchanged.
+lookup_ref() {
+  case "$1" in
+    *@sha256:*)
+      name=${1%@*}
+      case "${name##*/}" in *:*) name=${name%:*} ;; esac
+      printf '%s@%s\n' "$name" "${1##*@}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+# Runnable platforms (os/arch, one per line) of an image in its registry, looked up by digest when it is pinned.
+# Attestation manifests (provenance / SBOM, platform unknown/unknown) are not runnable platforms and are skipped.
+# Registry errors go to stderr, exit 1.
+image_platforms() {
+  ref=$(lookup_ref "$1")
+  out=$(docker manifest inspect "$ref" 2>&1) || { printf '%s\n' "$out" | tail -n 1 >&2; return 1; }
+  case "$out" in
+    *'"manifests"'*) : ;;   # multi-arch index: one request lists every platform
+    *) out=$(docker manifest inspect -v "$ref" 2>&1) || { printf '%s\n' "$out" | tail -n 1 >&2; return 1; } ;;
+  esac
+  printf '%s\n' "$out" | awk '
+    /"platform": *\{/ { inp = 1; os = ""; arch = ""; next }
+    inp && /"os": *"/           { v = $0; sub(/.*"os": *"/, "", v); sub(/".*/, "", v); os = v }
+    inp && /"architecture": *"/ { v = $0; sub(/.*"architecture": *"/, "", v); sub(/".*/, "", v); arch = v }
+    inp && /\}/ { inp = 0; if (os != "" && arch != "" && os != "unknown" && arch != "unknown") print os "/" arch }' \
+    | sort -u
+}
+
+# images of the selected compose files (COMPOSE_FILE in .env adds docker-compose.wazuh.yml)
+compose_images() { $DC config --images | sort -u; }
+
+# Stop before anything is pulled or changed unless EVERY image offers the Docker host's platform. Emulation (QEMU /
+# Rosetta) is never used as a fallback. With PLATFORM_LOCAL=true (--no-pull) an image already present locally is
+# checked locally; everything else is checked in its registry. CHECK_PLATFORM=linux/<arch> checks another platform
+# than the host's (CI: release/check_image_platforms.sh).
+check_platforms() {
+  if [ -n "${CHECK_PLATFORM:-}" ]; then want=$CHECK_PLATFORM; else want=$(docker_platform); fi
+  log "platform $want: checking $# images"
+  work=$(mktemp -d "${TMPDIR:-/tmp}/horus-platforms.XXXXXX")
+  i=0
+  for ref in "$@"; do   # registry lookups in parallel; results are evaluated in order below
+    i=$((i + 1))
+    printf '%s\n' "$ref" > "$work/$i.ref"
+    if [ "${PLATFORM_LOCAL:-false}" = true ] \
+       && docker image inspect -f '{{.Os}}/{{.Architecture}}' "$ref" > "$work/$i.out" 2>/dev/null; then
+      : > "$work/$i.ok"
+    else
+      ( image_platforms "$ref" > "$work/$i.out" 2> "$work/$i.err" && : > "$work/$i.ok" ) &
+    fi
+  done
+  wait
+  problems=""
+  n=0
+  while [ "$n" -lt "$i" ]; do
+    n=$((n + 1)); ref=$(cat "$work/$n.ref"); got=$(cat "$work/$n.out" 2>/dev/null || true)
+    if [ ! -e "$work/$n.ok" ]; then
+      problems="$problems
+  $ref: registry check failed ($(head -n 1 "$work/$n.err" 2>/dev/null)) - docker login / network / tag?"
+    elif [ -z "$got" ]; then
+      problems="$problems
+  $ref: no platform information in the registry"
+    elif ! printf '%s\n' "$got" | grep -qx "$want"; then
+      # shellcheck disable=SC2086  # list the available platforms on one line
+      problems="$problems
+  $ref: no $want image (available: $(printf '%s ' $got))"
+    fi
+  done
+  rm -rf "$work"
+  [ -z "$problems" ] || die "image platform check failed for $want - nothing was changed:$problems"
+  log "all images provide $want"
+}
+
+# --- bundled Wazuh ----------------------------------------------------------------------------------------------
+WAZUH_COMPOSE=docker-compose.wazuh.yml
+wazuh_enabled() { case "$(env_get COMPOSE_FILE)" in *"$WAZUH_COMPOSE"*) return 0 ;; esac; return 1; }
+
+# running bundled-Wazuh containers of this project (also when COMPOSE_FILE was never set)
+wazuh_running() {
+  project=$($DC config 2>/dev/null | sed -n 's/^name: *//p' | head -n 1)
+  docker ps -q --filter "label=com.docker.compose.project=${project:-horus}" \
+    --filter "label=com.docker.compose.service=wazuh-manager" | grep -q .
+}
+
+# A bundled Wazuh started by hand (docker compose -f docker-compose.wazuh.yml ...) belongs to this deployment: record
+# COMPOSE_FILE so that the scripts keep Horus attached to it instead of recreating Horus without the Wazuh network.
+wazuh_adopt() {
+  if ! wazuh_enabled && wazuh_running; then
+    env_set COMPOSE_FILE "$WAZUH_COMPOSE"
+    log "bundled Wazuh is running: COMPOSE_FILE=$WAZUH_COMPOSE added to $ENV_FILE"
+  fi
+}
+
+# Back up the Wazuh volumes when the selected deployment files would start another Wazuh version than the running one
+# (indexer data and manager databases are migrated forward and cannot be downgraded). Stops Wazuh; the caller starts.
+wazuh_backup_before_upgrade() {
+  cid=$($DC ps -q wazuh-manager 2>/dev/null | head -n 1)
+  [ -n "$cid" ] || return 0
+  old=$(docker inspect -f '{{.Config.Image}}' "$cid")
+  new=$(compose_images | grep '^wazuh/wazuh-manager:' | head -n 1 || true)
+  [ "$old" != "$new" ] || return 0
+  log "bundled Wazuh changes: $old -> $new - backing up the Wazuh volumes first"
+  scripts/wazuh-backup.sh backups || die "Wazuh backup failed - nothing was upgraded. The messages above say whether \
+Wazuh is still running (space check) or stopped, and how to continue"
+}
+
+wazuh_preflight() {
+  for v in WAZUH_INDEXER_PASSWORD WAZUH_API_PASSWORD WAZUH_DASHBOARD_PASSWORD; do
+    [ -n "$(env_get "$v")" ] || die "$v must be set in $ENV_FILE (no default Wazuh password is ever used)"
+  done
+  # vm.max_map_count is not namespaced: a container sees the value of the Docker host (also for remote contexts)
+  mmc=$(docker run --rm --network none alpine:3.24.2 cat /proc/sys/vm/max_map_count 2>/dev/null || echo 0)
+  [ "${mmc:-0}" -ge 262144 ] || die "vm.max_map_count is ${mmc:-unknown} on the Docker host; the Wazuh indexer needs \
+262144: sudo sysctl -w vm.max_map_count=262144 (persist it in /etc/sysctl.conf)"
+}
+
 # image digests of the running deployment (for rollback records)
 running_refs() {
   for svc in api frontend; do

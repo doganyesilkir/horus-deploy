@@ -1,12 +1,13 @@
 # =============================================================================
-# Horus + bundled single-node Wazuh (optional)
-#   ./scripts/wazuh-init.sh                      # once: password hashes for the indexer users (from .env)
-#   docker compose -f docker-compose.wazuh.yml up -d
+# Horus + bundled single-node Wazuh 4.14.8 (optional)
+#   ./scripts/install.sh --with-wazuh            # checks, password hashes, start (sets COMPOSE_FILE in .env)
 # Horus keeps working without Wazuh: the plain docker-compose.yml never references it.
 #
+# Every image is a multi-arch index (linux/amd64 + linux/arm64): Docker pulls the variant of the Docker host. No
+# platform is forced here - the scripts check before pulling that each image has the host's platform.
 # Host requirements (Wazuh indexer / OpenSearch):
 #   sudo sysctl -w vm.max_map_count=262144      (persist in /etc/sysctl.conf)
-#   >= 8 GB RAM for the whole stack, x86_64 host (Wazuh images are amd64 only)
+#   >= 8 GB RAM for the whole stack
 # WAZUH_INDEXER_PASSWORD, WAZUH_API_PASSWORD and WAZUH_DASHBOARD_PASSWORD are required (fail fast).
 # =============================================================================
 name: horus
@@ -19,43 +20,57 @@ include:
 
 x-wazuh-common: &wazuh-common
   restart: unless-stopped
-  platform: linux/amd64
   logging:
     driver: json-file
     options: {max-size: "20m", max-file: "5"}
 
 services:
-  # One-shot certificate generator (skips when certificates already exist)
+  # One-shot certificate generator (skips when certificates already exist). It downloads the Wazuh certificate tool
+  # of CERT_TOOL_VERSION from packages.wazuh.com, so the first start needs outbound HTTPS.
   wazuh-certs:
     <<: *wazuh-common
-    image: wazuh/wazuh-certs-generator:0.0.2
+    image: wazuh/wazuh-certs-generator:0.0.4
     container_name: wazuh-certs
     restart: "no"
     hostname: wazuh-certs-generator
-    entrypoint: ["/bin/bash", "-c", "if [ -f /certificates/root-ca.pem ]; then echo 'certificates exist'; else /entrypoint.sh; fi"]
+    environment:
+      CERT_TOOL_VERSION: "4.14"
+    # The generator's own script exits 0 even when it could not write a file: fail here instead, so that the
+    # indexer / manager / dashboard never start with a missing certificate.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        if [ -f /certificates/root-ca.pem ]; then echo 'certificates exist'; else /entrypoint.sh; fi
+        for f in root-ca.pem root-ca-manager.pem admin.pem admin-key.pem wazuh.indexer.pem wazuh.indexer-key.pem \
+                 wazuh.manager.pem wazuh.manager-key.pem wazuh.dashboard.pem wazuh.dashboard-key.pem; do
+          [ -s "/certificates/$$f" ] || { echo "ERROR: certificate $$f was not created" >&2; exit 1; }
+        done
+        echo 'certificates complete'
     volumes:
       - ./wazuh/config/certs.yml:/config/certs.yml:ro
       - ./wazuh/certs:/certificates/
 
   wazuh-indexer:
     <<: *wazuh-common
-    image: wazuh/wazuh-indexer:4.9.2
+    image: wazuh/wazuh-indexer:4.14.8
     container_name: wazuh-indexer
     hostname: wazuh.indexer
     environment:
-      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+      OPENSEARCH_JAVA_OPTS: "${WAZUH_INDEXER_JAVA_OPTS:--Xms1g -Xmx1g}"
     ulimits:
       memlock: {soft: -1, hard: -1}
       nofile: {soft: 65536, hard: 65536}
     volumes:
       - wazuh_indexer_data:/var/lib/wazuh-indexer
-      - ./wazuh/certs/root-ca.pem:/usr/share/wazuh-indexer/certs/root-ca.pem:ro
-      - ./wazuh/certs/wazuh.indexer-key.pem:/usr/share/wazuh-indexer/certs/wazuh.indexer.key:ro
-      - ./wazuh/certs/wazuh.indexer.pem:/usr/share/wazuh-indexer/certs/wazuh.indexer.pem:ro
-      - ./wazuh/certs/admin.pem:/usr/share/wazuh-indexer/certs/admin.pem:ro
-      - ./wazuh/certs/admin-key.pem:/usr/share/wazuh-indexer/certs/admin-key.pem:ro
-      - ./wazuh/config/wazuh_indexer/wazuh.indexer.yml:/usr/share/wazuh-indexer/opensearch.yml:ro
-      - ./wazuh/config/wazuh_indexer/internal_users.yml:/usr/share/wazuh-indexer/opensearch-security/internal_users.yml:ro
+      # Wazuh >= 4.10 reads its configuration from /usr/share/wazuh-indexer/config/ (no longer the install root)
+      - ./wazuh/certs/root-ca.pem:/usr/share/wazuh-indexer/config/certs/root-ca.pem:ro
+      - ./wazuh/certs/wazuh.indexer-key.pem:/usr/share/wazuh-indexer/config/certs/wazuh.indexer.key:ro
+      - ./wazuh/certs/wazuh.indexer.pem:/usr/share/wazuh-indexer/config/certs/wazuh.indexer.pem:ro
+      - ./wazuh/certs/admin.pem:/usr/share/wazuh-indexer/config/certs/admin.pem:ro
+      - ./wazuh/certs/admin-key.pem:/usr/share/wazuh-indexer/config/certs/admin-key.pem:ro
+      - ./wazuh/config/wazuh_indexer/wazuh.indexer.yml:/usr/share/wazuh-indexer/config/opensearch.yml:ro
+      - ./wazuh/config/wazuh_indexer/internal_users.yml:/usr/share/wazuh-indexer/config/opensearch-security/internal_users.yml:ro
     networks:
       wazuh_network:
         aliases: [wazuh.indexer]
@@ -73,22 +88,23 @@ services:
       resources:
         limits: {memory: 2g}
 
-  # The image's init skips an empty mounted volume, so a fresh wazuh_var_multigroups volume stays root:root and
-  # wazuh-remoted (uid 999) cannot create multigroup directories ("Permission denied"): agents assigned to more than
-  # one group never receive their merged configuration. Give the volume the ownership a regular install has.
+  # The image's init skips an empty mounted volume, so a fresh wazuh_var_multigroups volume can stay root:root and
+  # wazuh-remoted cannot create multigroup directories ("Permission denied"): agents assigned to more than one group
+  # never receive their merged configuration. Give the volume the ownership a regular install has. The manager image
+  # itself resolves the wazuh user/group, so a changed UID/GID in a new Wazuh release is picked up automatically.
   wazuh-volume-perms:
-    image: alpine:3.24.2
+    image: wazuh/wazuh-manager:4.14.8
     container_name: wazuh-volume-perms
     restart: "no"
     user: "0"
-    command: ["/bin/sh", "-c", "chown 999:999 /multigroups && chmod 0770 /multigroups"]
+    entrypoint: ["/bin/sh", "-c", "chown wazuh:wazuh /multigroups && chmod 0770 /multigroups"]
     volumes:
       - wazuh_var_multigroups:/multigroups
     network_mode: none
 
   wazuh-manager:
     <<: *wazuh-common
-    image: wazuh/wazuh-manager:4.9.2
+    image: wazuh/wazuh-manager:4.14.8
     container_name: wazuh-manager
     hostname: wazuh.manager
     ports:
@@ -127,15 +143,23 @@ services:
       egress_network:
         aliases: [wazuh.manager]
     depends_on:
-      wazuh-indexer: {condition: service_started}
+      # filebeat ships alerts to the indexer: start once the indexer answers
+      wazuh-indexer: {condition: service_healthy}
       wazuh-volume-perms: {condition: service_completed_successfully}
+    healthcheck:
+      # the Wazuh API answers 401 without credentials once it is up
+      test: ["CMD-SHELL", "curl -sk -o /dev/null -w '%{http_code}' https://localhost:55000/ | grep -qE '200|401'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 10
     deploy:
       resources:
         limits: {memory: 2g}
 
   wazuh-dashboard:
     <<: *wazuh-common
-    image: wazuh/wazuh-dashboard:4.9.2
+    image: wazuh/wazuh-dashboard:4.14.8
     container_name: wazuh-dashboard
     hostname: wazuh.dashboard
     ports:
@@ -163,7 +187,15 @@ services:
       wazuh_network:
         aliases: [wazuh.dashboard]
     depends_on:
-      wazuh-indexer: {condition: service_started}
+      wazuh-indexer: {condition: service_healthy}
+      # the dashboard writes its API connection (wazuh.yml) and checks the manager API on start
+      wazuh-manager: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sk -o /dev/null -w '%{http_code}' https://localhost:5601/api/status | grep -qE '200|401'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 10
 
 # wazuh_network (name horus_wazuh_network) is declared in wazuh/horus-network.compose.yml.
 

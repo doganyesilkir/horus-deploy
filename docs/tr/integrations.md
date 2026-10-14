@@ -48,8 +48,9 @@ Ardından `docker compose up -d` çalıştırın ve arayüzde **Bağlantıyı te
 
 ### Seçenek B - paketli tek düğümlü Wazuh
 
-> [!WARNING]
-> Yalnızca x86_64 Linux sunucular, yaklaşık 8 GB ek bellek. ARM64'te veya macOS'te Docker Desktop altında desteklenmez.
+Wazuh **4.14.8** (manager, indexer, dashboard) ve sertifika üreticisi **0.0.4**, çok mimarili imajlar olarak: Linux
+**x86_64 ve ARM64** üzerinde aynı komut; Docker sunucunuza uyan varyantı çeker. Yaklaşık 8 GB ek bellek. macOS veya
+Windows'ta Docker Desktop altında test edilmedi.
 
 ```bash
 # 1. Wazuh indexer için kernel ayarı
@@ -59,21 +60,46 @@ echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-wazuh.conf
 # 2. .env içinde parolalar (zorunlu - yayımlanmış hiçbir varsayılan kullanılmaz)
 #    WAZUH_INDEXER_PASSWORD=...  WAZUH_API_PASSWORD=...  WAZUH_DASHBOARD_PASSWORD=...
 
-# 3. bu parolalardan indexer kullanıcı hash'leri
-./scripts/wazuh-init.sh
-
-# 4. Horus'u Wazuh ile birlikte başlatın
-docker compose -f docker-compose.wazuh.yml up -d
-docker compose -f docker-compose.wazuh.yml ps
+# 3. kurulum (mevcut bir Horus kurulumuna Wazuh eklemek için de)
+./scripts/install.sh --with-wazuh
 ```
 
-`docker-compose.wazuh.yml` normal Horus stack'ini içerir ve entegrasyonu otomatik olarak etkinleştirir.
-Sunucularınızdaki Wazuh ajanları Docker sunucusunun **1514/1515** portlarına bağlanır; Wazuh dashboard'u
-**127.0.0.1:8443** üzerinde dinler (`WAZUH_DASHBOARD_BIND`, `WAZUH_DASHBOARD_PORT`).
+`install.sh --with-wazuh`:
 
-> [!NOTE]
-> Paketli Wazuh'u çalıştırırken elle yazdığınız Compose komutlarında `docker compose -f docker-compose.wazuh.yml ...`
-> kullanın.
+1. `.env` dosyasına `COMPOSE_FILE=docker-compose.wazuh.yml` yazar - bundan sonra düz `docker compose ...` komutları ve
+   tüm scriptler Wazuh servislerini de kapsar;
+2. **her** imajın (Horus, üçüncü taraf, Wazuh) Docker sunucusunun platformunu sunduğunu, Docker sunucusunda
+   `vm.max_map_count` değerinin en az 262144 olduğunu ve üç parolanın girildiğini kontrol eder - aksi halde durur;
+3. indexer parola hash'lerini bir kez yazar (`scripts/wazuh-init.sh`);
+4. her şeyi başlatır: sertifika üreticisi ilk başlatmada `wazuh/certs/` altında TLS sertifikalarını oluşturur (Wazuh
+   sertifika aracını `packages.wazuh.com` adresinden indirdiği için dışarıya HTTPS gerekir), ardından indexer, manager
+   ve dashboard, bir öncekinin sağlıklı olmasını bekleyerek sırayla başlar;
+5. `verify.sh` çalıştırır; bu script kimlik doğrulamalı bir indexer sorgusunu, manager API girişini ve dashboard'u da
+   kontrol eder.
+
+Entegrasyon otomatik olarak etkinleşir. Sunucularınızdaki Wazuh ajanları Docker sunucusunun **1514/1515** portlarına
+bağlanır; Wazuh dashboard'u **127.0.0.1:8443** üzerinde dinler (`WAZUH_DASHBOARD_BIND`, `WAZUH_DASHBOARD_PORT`).
+Önceki bir paketli Wazuh'tan yükseltme: [operations.md](operations.md#paketli-wazuh-yükseltmesi).
+
+#### Paketli Wazuh parolalarını değiştirme
+
+Indexer kullanıcıları `admin` (`WAZUH_INDEXER_PASSWORD`) ve `kibanaserver` (`WAZUH_DASHBOARD_PASSWORD`) için:
+
+```bash
+${EDITOR:-nano} .env                 # yeni WAZUH_INDEXER_PASSWORD ve/veya WAZUH_DASHBOARD_PASSWORD
+./scripts/wazuh-init.sh              # internal_users.yml içine yeni hash'ler
+docker compose exec wazuh-indexer bash -c 'export JAVA_HOME=/usr/share/wazuh-indexer/jdk && \
+  bash /usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh \
+  -f /usr/share/wazuh-indexer/config/opensearch-security/internal_users.yml -t internalusers -icl -nhnv -h localhost \
+  -cacert /usr/share/wazuh-indexer/config/certs/root-ca.pem \
+  -cert /usr/share/wazuh-indexer/config/certs/admin.pem -key /usr/share/wazuh-indexer/config/certs/admin-key.pem'
+docker compose up -d                 # manager, dashboard ve Horus yeni değerleri alır
+./scripts/verify.sh
+```
+
+Wazuh API kullanıcısı (`wazuh-wui`, `WAZUH_API_PASSWORD`) bu adımlarla değişmez: parolasını Wazuh API'si üzerinden
+değiştirin ve dashboard'un API bağlantısını (`wazuh_dashboard_config` volume'undaki `wazuh.yml`) Wazuh dokümantasyonunda
+anlatıldığı gibi güncelleyin.
 
 ## Falco
 

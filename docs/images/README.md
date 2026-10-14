@@ -21,6 +21,8 @@ the same file name** - no Markdown change is needed.
 | `integrations.png` | Settings / integrations catalogue | README - Screenshots |
 | `backups.png` | Backups - policies and restore tests | README - Screenshots |
 | `users-roles.png` | Users and roles (RBAC) | README - Screenshots |
+| `domain-monitoring.png` | Domain monitoring list | README - Screenshots, domain-monitoring.md |
+| `domain-monitoring-detail.png` | Domain monitoring detail of one monitor | README - Screenshots, domain-monitoring.md |
 
 **Guidelines for screenshots**
 
@@ -53,6 +55,8 @@ değişiklik gerekmez.
 | `integrations.png` | Ayarlar / entegrasyon kataloğu | README - Ekran görüntüleri |
 | `backups.png` | Yedekler - politikalar ve geri yükleme testleri | README - Ekran görüntüleri |
 | `users-roles.png` | Kullanıcılar ve roller (RBAC) | README - Ekran görüntüleri |
+| `domain-monitoring.png` | Domain izleme listesi | README - Ekran görüntüleri, domain-monitoring.md |
+| `domain-monitoring-detail.png` | Tek bir izlemenin detayı | README - Ekran görüntüleri, domain-monitoring.md |
 
 **Ekran görüntüsü kuralları**
 

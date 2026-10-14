@@ -106,6 +106,8 @@ olayları için **Falco** ile entegre olur.
 - Paket ve güncelleme görünürlüğü, paket deposu (repository) yönetimi
 - **Yapılandırma sapması (Configuration Drift)** ve **kapasite** takibi
 - Yedek doğrulama politikaları ve veritabanı geri yükleme testleri
+- **Domain izleme**: domain ve HTTPS adreslerinin erişilebilirliği, yanıt süresi, 24 sa / 7 gün / 30 gün uptime
+  değeri ve TLS sertifikası bitiş tarihi, Horus sunucusundan ölçülür ([docs/tr/domain-monitoring.md](docs/tr/domain-monitoring.md))
 - İşler (jobs), değişiklik ve bakım pencereleri, runbook'lar
 
 **Yönetişim**
@@ -184,10 +186,10 @@ flowchart LR
 
 | Platform | Durum | Notlar |
 |---|---|---|
-| **Ubuntu / Debian, x86_64** | ✅ Production için önerilen | Docker Engine; paketli Wazuh dahil tüm bileşenler desteklenir |
-| **Linux, ARM64** (ör. Graviton, Ampere) | ✅ Desteklenir | Native arm64 imajlar; **paketli Wazuh stack'i yalnızca x86_64** |
-| **macOS, Intel** | ✅ Değerlendirme / geliştirme | Docker Desktop |
-| **macOS, Apple Silicon** | ✅ Değerlendirme / geliştirme | Docker Desktop; arm64 imajlar otomatik seçilir |
+| **Ubuntu / Debian, x86_64** | ✅ Production için önerilen | Docker Engine; paketli Wazuh 4.14.8 dahil tüm bileşenler |
+| **Linux, ARM64** (ör. Graviton, Ampere) | ✅ Desteklenir | Paketli Wazuh 4.14.8 dahil tüm bileşenler için native arm64 imajlar |
+| **macOS, Intel** | ✅ Değerlendirme / geliştirme | Docker Desktop; paketli Wazuh orada test edilmedi |
+| **macOS, Apple Silicon** | ✅ Değerlendirme / geliştirme | Docker Desktop; arm64 imajlar otomatik seçilir; paketli Wazuh orada test edilmedi |
 | **Windows 10 / 11 (x86_64)** | ✅ Değerlendirme / geliştirme | Docker Desktop + **WSL2**, Linux containers modu; scriptler WSL içinde çalıştırılır |
 | **ARM tabanlı Windows** | ⚠️ En iyi çaba (best effort), test edilmedi | Windows on ARM için Docker Desktop + WSL2 (arm64 imajlar) |
 | **Native Windows container'ları** | ❌ Desteklenmez | Horus imajları Linux container'larıdır |
@@ -201,7 +203,7 @@ flowchart LR
 > [!TIP]
 > **Önerilen production kurulumu:** 4+ vCPU, 8+ GB RAM (paketli Wazuh ile 16 GB), 50+ GB SSD, bir DNS adı ve bir
 > sertifika otoritesi (CA) tarafından imzalanmış TLS sertifikasına sahip, Horus'a ayrılmış bir Ubuntu 22.04/24.04 LTS
-> veya Debian 12 x86_64 sanal makine.
+> veya Debian 12 sanal makine (x86_64 veya ARM64).
 
 ---
 
@@ -221,8 +223,9 @@ cp .env.example .env
 chmod 600 .env
 ${EDITOR:-nano} .env        # en azından HORUS_DOMAIN ve HORUS_ADMIN_PASSWORD değerlerini girin (aşağıya bakın)
 
-# 3. Kurun - imajları çeker, stack'i başlatır ve doğrular
+# 3. Kurun - platformu kontrol eder, imajları çeker, stack'i başlatır ve doğrular
 ./scripts/install.sh --self-signed     # nginx/certs/ altında sertifikanız varsa --self-signed olmadan
+                                       # paketli Wazuh için --with-wazuh ekleyin (aşağıda Wazuh bölümüne bakın)
 ```
 
 Ardından `https://<HORUS_DOMAIN>/` adresini açın, `admin` kullanıcısı ve `HORUS_ADMIN_PASSWORD` ile giriş yapın ve
@@ -232,6 +235,10 @@ yeni bir parola belirleyin.
 
 - **İmajlar Docker Hub'dan çekilir.** `install.sh` `docker compose pull` çalıştırır; imajları hiçbir zaman elle
   indirmezsiniz. Docker, sunucunuza uyan `linux/amd64` veya `linux/arm64` varyantını seçer.
+- **Önce platform kontrol edilir.** Scriptler hiçbir şey çekmeden önce Docker daemon'una (scripti çalıştıran makineye
+  değil; böylece uzak Docker context'leri de çalışır) platformunu sorar ve Horus, üçüncü taraf servisler ve paketli
+  Wazuh dahil **her** imajın bu platformu sunduğunu registry'de kontrol eder. Eksik platform veya registry hatası,
+  etkilenen imajları listeleyerek kurulumu durdurur; emülasyon hiçbir zaman kullanılmaz.
 - **Secret'lar üretilir.** `.env` içinde boş bırakılan her secret (veritabanı, Redis, JWT, ana anahtar …)
   `horus_secrets` Docker volume'unda bir kez oluşturulur.
 - **`cosign` yüklüyse imzalar doğrulanır.** Kurulum scripti iki imajı da sürümün imza kimliğine (signing identity)
@@ -299,12 +306,17 @@ aldığınız bilgilerle `docker login` çalıştırın.
 ### Wazuh (isteğe bağlı)
 
 - **Harici Wazuh:** Docker sunucusunda ek bir şey gerekmez - bağlantıyı `.env` içinde veya arayüzde yapılandırın.
-- **Paketli Wazuh** (`docker-compose.wazuh.yml`): yalnızca x86_64 Linux, +8 GB RAM ve sunucuda:
+- **Paketli Wazuh 4.14.8** (`docker-compose.wazuh.yml`): x86_64 **veya** ARM64 Linux (çok mimarili imajlar, aynı
+  komut), +8 GB RAM, ilk başlatmada `packages.wazuh.com` adresine giden HTTPS (sertifika aracı) ve sunucuda:
 
   ```bash
   sudo sysctl -w vm.max_map_count=262144
   echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-wazuh.conf
   ```
+
+  `.env` içinde `WAZUH_INDEXER_PASSWORD`, `WAZUH_API_PASSWORD` ve `WAZUH_DASHBOARD_PASSWORD` değerlerini girin, ardından
+  `./scripts/install.sh --with-wazuh` ile kurun (mevcut bir kuruluma Wazuh eklemek için de aynı komut). Önceki bir
+  paketli Wazuh'tan yükseltme: [docs/tr/operations.md](docs/tr/operations.md#paketli-wazuh-yükseltmesi).
 
 ---
 
@@ -353,9 +365,8 @@ işlemcinize uyanı otomatik olarak çeker:
 
 Mimari seçmeniz gerekmez. Adımlar yukarıdaki Ubuntu / Debian bölümüyle aynıdır.
 
-> [!WARNING]
-> **Paketli Wazuh stack'i** (`docker-compose.wazuh.yml`) yalnızca x86_64 üzerinde çalışır. ARM64'te Horus'u başka bir
-> yerde çalışan bir Wazuh sunucusuna bağlayın.
+**Paketli Wazuh** da aynı şekilde çalışır: Wazuh 4.14.8 ve sertifika üreticisi de çok mimarilidir; bu nedenle
+`./scripts/install.sh --with-wazuh` x86_64 ve ARM64'te aynı komuttur.
 
 ### macOS (Intel)
 
@@ -379,8 +390,8 @@ ve ek parametre gerekmez.
 
 > [!NOTE]
 > macOS'te Horus'u değerlendirme ve geliştirme amacıyla kullanın. İsteğe bağlı **Falco** profili Linux sunucu
-> kernel'i gerektirir ve **paketli Wazuh** stack'i yalnızca x86_64 üzerinde çalışır; bu nedenle ikisi de Mac'te
-> Docker Desktop altında çalışmaz.
+> kernel'i gerektirir ve Docker Desktop altında çalışmaz. **Paketli Wazuh**'un çok mimarili imajları vardır ancak Mac'te
+> Docker Desktop altında test edilmemiştir - bunun için bir Linux sunucu kullanın.
 
 ### Windows 10 / 11
 
@@ -535,14 +546,16 @@ ilk hatada durur.
 
 | Script | Amaç | Ne zaman | Örnek |
 |---|---|---|---|
-| `install.sh` | Ön kontrol, imza kontrolü, çekme, başlatma, sağlık bekleme, doğrulama | İlk kurulum | `./scripts/install.sh --self-signed` |
-| `update.sh` | Ön kontrol, çekme + imza kontrolü, şema kontrolü, **yedek**, kayıt, başlatma, doğrulama | Yeni sürüm | `./scripts/update.sh 1.1.0 sha256:<backend> sha256:<frontend>` |
+| `install.sh` | Ön kontrol, platform kontrolü, imza kontrolü, çekme, başlatma, sağlık bekleme, doğrulama (`--with-wazuh`: paketli Wazuh) | İlk kurulum, Wazuh ekleme | `./scripts/install.sh --self-signed` |
+| `update.sh` | Ön kontrol, platform kontrolü, çekme + imza kontrolü, şema kontrolü, **yedek**, kayıt, Wazuh sürümü değişirse Wazuh volume yedeği, başlatma, doğrulama | Yeni sürüm | `./scripts/update.sh 1.1.0 sha256:<backend> sha256:<frontend>` |
 | `rollback.sh` | Son güncellemeden önce kaydedilen sürüme dönüş | Bir güncelleme sorun çıkardığında | `./scripts/rollback.sh` |
 | `backup.sh` | Veritabanı dökümü + secrets volume'u + `.env` tek bir arşivde | Düzenli olarak, değişikliklerden önce | `./scripts/backup.sh backups` |
 | `restore.sh` | Bir arşivi geri yükleme (yeni bir sunucuda da) | Felaket kurtarma, taşıma | `./scripts/restore.sh backups/horus-<ts>.tar.gz` |
 | `verify.sh` | Sağlık, HTTPS, HSTS, yönlendirme, container sıkılaştırma kontrolleri | Kurulum / güncelleme sonrası, her zaman | `./scripts/verify.sh` |
 | `verify-signatures.sh` | Yapılandırılmış iki imajın Cosign doğrulaması | Kurulum / güncelleme öncesi | `./scripts/verify-signatures.sh` |
-| `wazuh-init.sh` | Wazuh indexer kullanıcı hash'lerini `.env` parolalarınızdan yazar | Bir kez, paketli Wazuh'tan önce | `./scripts/wazuh-init.sh` |
+| `wazuh-init.sh` | Wazuh indexer kullanıcı hash'lerini `.env` parolalarınızdan yazar | `--with-wazuh` ile **otomatik**; [parola değiştirmek](docs/tr/integrations.md#paketli-wazuh-parolalarını-değiştirme) için yeniden | `./scripts/wazuh-init.sh` |
+| `wazuh-backup.sh` | Paketli Wazuh'u durdurur ve tüm veri volume'larını kopyalar | Wazuh yükseltmesinden önce **otomatik**; riskli değişikliklerden önce | `./scripts/wazuh-backup.sh backups` |
+| `wazuh-restore.sh` | Wazuh volume'larını böyle bir yedekten geri koyar | Wazuh yükseltmesinden sonra geri dönüş | `./scripts/wazuh-restore.sh backups/wazuh-<ts>` |
 | `init-secrets.sh` | Eksik secret'ları `horus_secrets` volume'una üretir | **Otomatik** (`horus-init` container'ı çalıştırır) | - |
 
 `scripts/lib.sh` ortak yardımcı fonksiyonları içerir ve doğrudan çalıştırılmaz. Ayrıntılı davranış ve seçenekler:
@@ -720,6 +733,10 @@ Ayrıca bkz. [SECURITY.tr.md](SECURITY.tr.md).
     <td align="center"><img src="docs/images/backups.png" alt="Yedekler"><br><sub><b>Yedekler</b> - doğrulama politikaları ve geri yükleme testleri</sub></td>
   </tr>
   <tr>
+    <td align="center"><img src="docs/images/domain-monitoring.png" alt="Domain izleme"><br><sub><b>Domain izleme</b> - durum, yanıt süresi, kapsamıyla uptime, TLS bitiş tarihi</sub></td>
+    <td align="center"><img src="docs/images/domain-monitoring-detail.png" alt="Domain izleme detayı"><br><sub><b>İzleme detayı</b> - yanıt süresi, sertifika, çözümlenen adresler, kontrol geçmişi</sub></td>
+  </tr>
+  <tr>
     <td align="center" colspan="2"><img src="docs/images/users-roles.png" alt="Kullanıcılar ve roller" width="50%"><br><sub><b>Kullanıcılar ve roller</b> - rol tabanlı erişim kontrolü</sub></td>
   </tr>
 </table>
@@ -813,9 +830,11 @@ yetersiz bellek veya dolu disk.
 <details>
 <summary><b>Paketli Wazuh başlamıyor</b></summary>
 
-Wazuh x86_64, `vm.max_map_count=262144`, yaklaşık 8 GB ek bellek, `.env` içinde üç `WAZUH_*_PASSWORD` değeri ve bir
-kez çalıştırılmış `./scripts/wazuh-init.sh` gerektirir. `docker compose -f docker-compose.wazuh.yml logs wazuh-indexer`
-ile kontrol edin.
+Wazuh `vm.max_map_count=262144`, yaklaşık 8 GB ek bellek, `.env` içinde üç `WAZUH_*_PASSWORD` değeri ve ilk sertifika
+üretimi için `packages.wazuh.com` adresine giden HTTPS gerektirir; `install.sh --with-wazuh` bunları kontrol eder.
+`exec format error`, yanlış mimariye ait bir imaj anlamına gelir - 4.14.8 öncesi Wazuh ve 0.0.4 öncesi sertifika
+üreticisi yalnızca amd64 idi; bu sürümün dağıtım dosyalarını kullanın. `docker compose logs wazuh-indexer` ile kontrol
+edin.
 </details>
 
 <details>
@@ -840,7 +859,8 @@ macOS ve Windows 10/11'de. Bkz. [destek matrisi](#destek-matrisi).
 Hayır. `install.sh` ve `update.sh` imajları `docker compose pull` ile Docker Hub'dan çeker.
 
 **Docker doğru mimariyi seçer mi?**
-Evet. Her tag çok mimarili bir imajdır; Docker sunucunuz için `linux/amd64` veya `linux/arm64` varyantını seçer.
+Evet. Her tag çok mimarili bir imajdır; Docker sunucunuz için `linux/amd64` veya `linux/arm64` varyantını seçer. Bu,
+paketli Wazuh için de geçerlidir. Scriptler çekmeden önce her imajın sunucunuzun platformunu sunduğunu kontrol eder.
 
 **Horus Windows'ta çalışır mı?**
 Evet; WSL2 ve Linux container'larıyla Docker Desktop üzerinden, scriptler WSL içinde çalıştırılarak. Native Windows
@@ -863,7 +883,7 @@ Horus imajları Linux container'larıdır ve scriptler Linux dosya izinlerine da
 ikisini de sağlar ve Docker Desktop'ın Linux container'ları için kullandığı altyapıdır.
 
 **Production için ne önerirsiniz?**
-Horus'a ayrılmış bir Ubuntu LTS veya Debian 12 x86_64 sanal makine, CA tarafından imzalanmış bir sertifika,
+Horus'a ayrılmış bir Ubuntu LTS veya Debian 12 sanal makine (x86_64 veya ARM64), CA tarafından imzalanmış bir sertifika,
 `--require-signature` ile digest'i sabitlenmiş imajlar, düzenli şifreli ve sunucu dışında saklanan yedekler ve dört
 göz onaylı `APPROVAL` modu.
 
@@ -898,8 +918,9 @@ Kurulumdan sonra:
 1. ✅ `admin` olarak **giriş yapın** ve yeni bir parola belirleyin.
 2. 👥 Doğru rollerle **kişisel hesaplar oluşturun** ve `HORUS_ADMIN_PASSWORD` değerini `.env`'den kaldırın.
 3. 🔌 **Entegrasyonları yapılandırın** - Wazuh, bildirimler, tehdit istihbaratı ([docs/tr/integrations.md](docs/tr/integrations.md)).
-4. 🖥️ **İlk sunucunuzu ekleyin** - **Sunucular (Assets)** altında (SSH adresi, kullanıcı ve anahtar) ve keşif ile bir
+4. 🌐 **Domainlerinizi izleyin** - web sitelerinizi ve HTTPS uç noktalarınızı **Domain İzleme** altına ekleyin ([docs/tr/domain-monitoring.md](docs/tr/domain-monitoring.md)).
+5. 🖥️ **İlk sunucunuzu ekleyin** - **Sunucular (Assets)** altında (SSH adresi, kullanıcı ve anahtar) ve keşif ile bir
    güvenlik taraması çalıştırın.
-5. 📋 **Politikaları gözden geçirin** - çalışma modu, onaylar, baseline'lar; geçersiz kılmaları [`policies/`](policies/README.tr.md) altına koyun.
-6. 💾 **Yedek alın** - `./scripts/backup.sh` - ve şifreli olarak sunucu dışında saklayın.
-7. 🔍 Dağıtımdaki her değişiklikten sonra `./scripts/verify.sh` **çalıştırın**.
+6. 📋 **Politikaları gözden geçirin** - çalışma modu, onaylar, baseline'lar; geçersiz kılmaları [`policies/`](policies/README.tr.md) altına koyun.
+7. 💾 **Yedek alın** - `./scripts/backup.sh` - ve şifreli olarak sunucu dışında saklayın.
+8. 🔍 Dağıtımdaki her değişiklikten sonra `./scripts/verify.sh` **çalıştırın**.

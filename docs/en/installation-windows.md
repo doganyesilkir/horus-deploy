@@ -127,6 +127,6 @@ the Horus release pipeline - use it for evaluation only.
 |---|---|
 | Horus web UI, API, automation over SSH | ✅ Works |
 | Optional Falco on the Docker host (`--profile falco`) | ❌ Needs a Linux host kernel with eBPF |
-| Bundled Wazuh (`docker-compose.wazuh.yml`) | ⚠️ Not recommended - needs ~8 GB extra memory and `vm.max_map_count` in the WSL kernel |
+| Bundled Wazuh (`docker-compose.wazuh.yml`) | ⚠️ Not tested - needs ~8 GB extra memory and `vm.max_map_count` in the WSL kernel |
 | External Wazuh (configured in Integrations) | ✅ Works |
 | Native Windows containers | ❌ Not supported |

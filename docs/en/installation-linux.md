@@ -2,8 +2,8 @@
 
 ← [Back to README](../../README.md) · English | [Türkçe](../tr/installation-linux.md)
 
-This is the recommended platform for production. Every component is supported on x86_64, including the bundled
-Wazuh stack. On ARM64 everything except the bundled Wazuh is supported.
+This is the recommended platform for production. Every component, including the bundled Wazuh 4.14.8 stack, is
+supported on x86_64 and on ARM64 with the same commands - Docker pulls the image variant of your host.
 
 - [1. Prepare the host](#1-prepare-the-host)
 - [2. Install Docker](#2-install-docker)
@@ -151,10 +151,13 @@ sudo chgrp 101 nginx/certs/privkey.pem     # the nginx container runs as uid/gid
 ./scripts/install.sh                       # with a certificate in nginx/certs/
 ./scripts/install.sh --self-signed         # temporary self-signed certificate
 ./scripts/install.sh --require-signature   # production: refuse to install without a verified signature
+./scripts/install.sh --with-wazuh          # also run the bundled Wazuh (combine with the options above)
 ```
 
-The installer runs a preflight, verifies signatures (when `cosign` is installed), pulls the images from Docker Hub,
-starts the stack, waits for every health check and runs `scripts/verify.sh`.
+The installer runs a preflight, checks that every image offers the Docker host's platform (`linux/amd64` or
+`linux/arm64`), verifies signatures (when `cosign` is installed), pulls the images from Docker Hub, starts the stack,
+waits for every health check and runs `scripts/verify.sh`. For `--with-wazuh`, first set `vm.max_map_count` and the
+three `WAZUH_*_PASSWORD` values (see [integrations.md](integrations.md#option-b---bundled-single-node-wazuh)).
 
 ## 8. Verify and sign in
 
@@ -171,7 +174,7 @@ with the [next steps](../../README.md#next-steps).
 - Horus images are **multi-architecture**; Docker pulls the `linux/arm64` variant automatically. No flags or
   emulation are needed.
 - `cosign` is available for ARM64 (`cosign-linux-arm64`, selected by the `dpkg --print-architecture` command above).
-- The **bundled Wazuh** stack (`docker-compose.wazuh.yml`) uses x86_64-only images. Connect Horus to an external
-  Wazuh server instead (see [integrations.md](integrations.md)).
+- The **bundled Wazuh 4.14.8** stack (`docker-compose.wazuh.yml`) and its certificate generator are multi-arch as well:
+  `./scripts/install.sh --with-wazuh` runs natively on ARM64 (Wazuh releases before 4.14.8 were x86_64-only).
 - Run Horus as a long-running service: Docker restarts every container automatically (`restart: unless-stopped`)
   after a reboot as long as the Docker service is enabled (`sudo systemctl enable docker`).

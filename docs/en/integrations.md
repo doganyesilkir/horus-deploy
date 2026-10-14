@@ -48,8 +48,9 @@ Then `docker compose up -d` and use **Test connection** in the UI.
 
 ### Option B - bundled single-node Wazuh
 
-> [!WARNING]
-> x86_64 Linux hosts only, about 8 GB of extra memory. Not supported on ARM64 or under Docker Desktop on macOS.
+Wazuh **4.14.8** (manager, indexer, dashboard) and certificate generator **0.0.4**, as multi-arch images: the same
+command on Linux **x86_64 and ARM64**, Docker pulls the variant of your host. About 8 GB of extra memory. Not tested
+under Docker Desktop on macOS or Windows.
 
 ```bash
 # 1. kernel setting for the Wazuh indexer
@@ -59,20 +60,45 @@ echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-wazuh.conf
 # 2. passwords in .env (required - no published default is ever used)
 #    WAZUH_INDEXER_PASSWORD=...  WAZUH_API_PASSWORD=...  WAZUH_DASHBOARD_PASSWORD=...
 
-# 3. indexer user hashes from those passwords
-./scripts/wazuh-init.sh
-
-# 4. start Horus together with Wazuh
-docker compose -f docker-compose.wazuh.yml up -d
-docker compose -f docker-compose.wazuh.yml ps
+# 3. install (also adds Wazuh to an existing Horus installation)
+./scripts/install.sh --with-wazuh
 ```
 
-`docker-compose.wazuh.yml` includes the normal Horus stack and enables the integration automatically. Wazuh agents
-on your servers connect to ports **1514/1515** of the Docker host; the Wazuh dashboard listens on
-**127.0.0.1:8443** (`WAZUH_DASHBOARD_BIND`, `WAZUH_DASHBOARD_PORT`).
+`install.sh --with-wazuh`:
 
-> [!NOTE]
-> When you run the bundled Wazuh, use `docker compose -f docker-compose.wazuh.yml ...` for manual Compose commands.
+1. writes `COMPOSE_FILE=docker-compose.wazuh.yml` to `.env` - from then on plain `docker compose ...` commands and every
+   script include the Wazuh services;
+2. checks that **every** image (Horus, third-party, Wazuh) offers the Docker host's platform, that `vm.max_map_count`
+   is at least 262144 on the Docker host and that the three passwords are set - and stops otherwise;
+3. writes the indexer password hashes once (`scripts/wazuh-init.sh`);
+4. starts everything: the certificate generator creates the TLS certificates in `wazuh/certs/` on the first start
+   (it downloads the Wazuh certificate tool from `packages.wazuh.com`, so outbound HTTPS is needed), then the indexer,
+   the manager and the dashboard start in that order once the previous one is healthy;
+5. runs `verify.sh`, which also checks an authenticated indexer query, the manager API login and the dashboard.
+
+The integration is enabled automatically. Wazuh agents on your servers connect to ports **1514/1515** of the Docker
+host; the Wazuh dashboard listens on **127.0.0.1:8443** (`WAZUH_DASHBOARD_BIND`, `WAZUH_DASHBOARD_PORT`).
+Upgrading from an earlier bundled Wazuh: [operations.md](operations.md#bundled-wazuh-upgrade).
+
+#### Changing the bundled Wazuh passwords
+
+For the indexer users `admin` (`WAZUH_INDEXER_PASSWORD`) and `kibanaserver` (`WAZUH_DASHBOARD_PASSWORD`):
+
+```bash
+${EDITOR:-nano} .env                 # new WAZUH_INDEXER_PASSWORD and/or WAZUH_DASHBOARD_PASSWORD
+./scripts/wazuh-init.sh              # new hashes into internal_users.yml
+docker compose exec wazuh-indexer bash -c 'export JAVA_HOME=/usr/share/wazuh-indexer/jdk && \
+  bash /usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh \
+  -f /usr/share/wazuh-indexer/config/opensearch-security/internal_users.yml -t internalusers -icl -nhnv -h localhost \
+  -cacert /usr/share/wazuh-indexer/config/certs/root-ca.pem \
+  -cert /usr/share/wazuh-indexer/config/certs/admin.pem -key /usr/share/wazuh-indexer/config/certs/admin-key.pem'
+docker compose up -d                 # manager, dashboard and Horus pick up the new values
+./scripts/verify.sh
+```
+
+The Wazuh API user (`wazuh-wui`, `WAZUH_API_PASSWORD`) is not covered by these steps: change it through the Wazuh API
+and update the dashboard's API connection (`wazuh.yml` in the `wazuh_dashboard_config` volume) as described in the
+Wazuh documentation.
 
 ## Falco
 

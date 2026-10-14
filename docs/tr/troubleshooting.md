@@ -73,9 +73,14 @@ docker compose logs --tail 200 <servis>   # neden?
 | Belirti | Neden ve çözüm |
 |---|---|
 | `set WAZUH_..._PASSWORD in .env` | Paketli Wazuh üç parolanın da girilmesini ister - varsayılan değer yoktur |
-| `wazuh-indexer` çıkıyor | `vm.max_map_count` çok düşük (`sudo sysctl -w vm.max_map_count=262144`) veya bellek yetersiz |
+| `image platform check failed for linux/<arch>` | Bir imaj sunucunuzun platformunu sunmuyor veya registry okunamadı (satır hangisi olduğunu söyler). Giriş yapın (`docker login`), ağı kontrol edin veya bu sürümün dağıtım dosyalarını kullanın |
+| `exec format error` (ör. `wazuh-certs`) | Yanlış mimariye ait bir imaj: 4.14.8 öncesi Wazuh ve 0.0.4 öncesi sertifika üreticisi yalnızca amd64 idi. Bu sürümün dağıtım dosyalarına geçin ve `./scripts/install.sh --with-wazuh` çalıştırın |
+| `certificate ... was not created` (`wazuh-certs` 1 ile çıkar) | Üretici `wazuh/certs/` dizinine yazamadı veya aracını `packages.wazuh.com` adresinden indiremedi (dışarıya HTTPS). Sorunu giderin, `wazuh/certs/` dizinini boşaltın ve yeniden başlatın |
+| `insufficient disk space for the Wazuh backup` | Wazuh volume'ları (zafiyet içeriği: birkaç GB) yedek dizinine sığmıyor. Yer açın veya önce `./scripts/wazuh-backup.sh /yeterli/alanli/dizin` çalıştırın; Wazuh durdurulmadı |
+| `vm.max_map_count is ... on the Docker host` / `wazuh-indexer` çıkıyor | `sudo sysctl -w vm.max_map_count=262144` veya bellek yetersiz (`WAZUH_INDEXER_JAVA_OPTS`) |
 | Indexer kimlik doğrulaması başarısız | `./scripts/wazuh-init.sh` çalıştırılmamış veya parolalar sonradan değişmiş - başlatmadan önce yeniden çalıştırın |
-| ARM64 / macOS'te paketli Wazuh | Desteklenmez (yalnızca x86_64 imajları) - harici bir Wazuh kullanın |
+| `bundled Wazuh is running: COMPOSE_FILE=... added` | Bilgi: Wazuh elle `-f docker-compose.wazuh.yml` ile başlatılmıştı; scriptler artık Horus'u ona bağlı tutar |
+| Docker Desktop altında paketli Wazuh (macOS / Windows) | Test edilmedi - bir Linux sunucu (x86_64 veya ARM64) ya da harici bir Wazuh kullanın |
 | Bağlantı testi başarısız (harici Wazuh) | URL/port, kimlik bilgileri ve TLS: doğrulamayı açık tutun ve özel bir CA için `HORUS_WAZUH_CA_BUNDLE` ayarlayın |
 
 ## Güncelleme veya geri yükleme sonrası

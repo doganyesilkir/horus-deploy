@@ -13,6 +13,9 @@ Tüm scriptler `scripts/` altındaki POSIX kabuk scriptleridir. Bunları Docker 
 - [verify.sh](#verifysh)
 - [verify-signatures.sh](#verify-signaturessh)
 - [wazuh-init.sh](#wazuh-initsh)
+- [wazuh-backup.sh ve wazuh-restore.sh](#wazuh-backupsh-ve-wazuh-restoresh)
+- [Paketli Wazuh yükseltmesi](#paketli-wazuh-yükseltmesi)
+- [Platform kontrolü](#platform-kontrolü)
 - [init-secrets.sh](#init-secretssh)
 - [Dağıtım geçmişi: .horus-deployments](#dağıtım-geçmişi-horus-deployments)
 - [Günlük komutlar](#günlük-komutlar)
@@ -21,7 +24,7 @@ Tüm scriptler `scripts/` altındaki POSIX kabuk scriptleridir. Bunları Docker 
 ## install.sh
 
 ```bash
-./scripts/install.sh [--self-signed] [--no-pull] [--require-signature]
+./scripts/install.sh [--self-signed] [--no-pull] [--require-signature] [--with-wazuh]
 ```
 
 | Seçenek | Etkisi |
@@ -29,9 +32,11 @@ Tüm scriptler `scripts/` altındaki POSIX kabuk scriptleridir. Bunları Docker 
 | `--self-signed` | `nginx/certs/` boşsa `HORUS_DOMAIN` için geçici, kendinden imzalı bir sertifika oluşturur |
 | `--no-pull` | Yerelde zaten bulunan imajları kullanır (internetsiz/air-gapped sunucular: önce `docker load` ile yükleyin) |
 | `--require-signature` | `cosign` iki imajı da doğrulamadıkça kurulumu reddeder |
+| `--with-wazuh` | Paketli Wazuh'u ekler: `.env` içinde `COMPOSE_FILE=docker-compose.wazuh.yml`, Wazuh kontrolleri, bir kez `wazuh-init.sh` |
 
-Adımlar: ön kontrol → imza doğrulama (`cosign` yüklüyse) → `docker compose pull` → `docker compose up -d` → sağlık
-kontrollerini bekleme (en fazla 10 dakika) → `verify.sh` → `.horus-deployments` dosyasına kayıt.
+Adımlar: ön kontrol → [platform kontrolü](#platform-kontrolü) → (Wazuh: parolalar, `vm.max_map_count`, parola
+hash'leri) → imza doğrulama (`cosign` yüklüyse) → `docker compose pull` → `docker compose up -d` → sağlık
+kontrollerini bekleme (en fazla 10 dakika, Wazuh ile 20) → `verify.sh` → `.horus-deployments` dosyasına kayıt.
 
 **Ön kontroller:** Docker ve Compose ≥ 2.24, `.env` mevcut (`chmod 600` değilse uyarır), tag/digest içermeyen
 `HORUS_IMAGE`, kesin `HORUS_VERSION` (`latest` yok), digest biçimi, `HORUS_WORKER_CPUS` ≤ sunucu CPU sayısı, `https`
@@ -47,12 +52,15 @@ modunda TLS dosyaları, boş disk alanı (5 GB'ın altında uyarır), geçerli C
 
 Adımlar:
 
-1. Ön kontrol, ardından `backend-<version>` / `frontend-<version>` imajlarını çekme (verildiyse digest'lerle).
+1. Ön kontrol ve yeni sürümün her imajı için [platform kontrolü](#platform-kontrolü) (geçtiğiniz dağıtım dosyalarıyla),
+   ardından `backend-<version>` / `frontend-<version>` imajlarını çekme (verildiyse digest'lerle).
 2. `cosign` yüklüyse ve iki digest de verildiyse imza doğrulama - aksi halde bir uyarı.
 3. **Şema kontrolü:** yeni backend imajı, veritabanının mevcut migration revizyonunu tanımalıdır; böylece kazara sürüm
    düşürme olamaz. Tanımıyorsa hiçbir şey değiştirilmez.
 4. `backups/` altına **yedek** ve mevcut sürümün (sürüm, digest'ler, şema revizyonu, yedek dosyası)
-   `.horus-deployments` dosyasına kaydı.
+   `.horus-deployments` dosyasına kaydı. Yeni dağıtım dosyaları paketli Wazuh sürümünü değiştiriyorsa
+   `wazuh-backup.sh` ayrıca Wazuh'u durdurur ve volume'larını kopyalar (bkz.
+   [Paketli Wazuh yükseltmesi](#paketli-wazuh-yükseltmesi)).
 5. `HORUS_VERSION` ve digest'ler `.env`'e yazılır; stack yeniden başlatılır (`api` container'ı veritabanı
    migration'larını uygular).
 6. Sağlık bekleme ve `verify.sh`. Başarısızlıkta script size `rollback.sh` çalıştırmanızı söyler.
@@ -179,9 +187,86 @@ cosign verify \
 ```
 
 Yalnızca paketli Wazuh içindir. `wazuh/config/wazuh_indexer/internal_users.yml` dosyasını `WAZUH_INDEXER_PASSWORD` ve
-`WAZUH_DASHBOARD_PASSWORD` değerlerinin bcrypt hash'leriyle yazar (hash'ler ağ erişimi olmayan bir container'da Wazuh
-indexer imajı tarafından hesaplanır). İlk `docker compose -f docker-compose.wazuh.yml up -d` komutundan önce bir kez
-çalıştırın. Üretilen dosya git tarafından yok sayılır.
+`WAZUH_DASHBOARD_PASSWORD` değerlerinin bcrypt hash'leriyle yazar (hash'ler, imajın Docker sunucusunun platformu için
+mevcut olduğu kontrol edildikten sonra, ağ erişimi olmayan bir container'da Wazuh indexer imajı tarafından hesaplanır).
+`install.sh --with-wazuh` dosya yoksa bunu çalıştırır; kendiniz yalnızca bu parolaları değiştirmek için çalıştırın.
+Üretilen dosya git tarafından yok sayılır.
+
+## wazuh-backup.sh ve wazuh-restore.sh
+
+```bash
+./scripts/wazuh-backup.sh [<dizin>]                   # varsayılan: backups -> backups/wazuh-<zaman damgası>/
+./scripts/wazuh-restore.sh backups/wazuh-<zaman damgası>
+```
+
+`wazuh-backup.sh` Wazuh servislerini **durdurur** (çalışan bir indexer tutarlı şekilde kopyalanamaz) ve her Wazuh
+volume'unu - indexer verisi, manager yapılandırması ve veritabanları, ajan anahtarları, kuyruklar, Filebeat durumu,
+dashboard yapılandırması - volume başına bir arşive, imaj sürümlerini içeren bir `MANIFEST` dosyasıyla birlikte kopyalar.
+Wazuh'u yeniden başlatmaz. Veri Docker sunucusundan akıtılır; bu nedenle uzak Docker context'leri de çalışır.
+Arşivleri `.env` gibi saklayın: ajan anahtarlarını ve indekslenmiş tüm olayları içerirler.
+
+- **Önce alan kontrolü.** Script, Wazuh henüz çalışırken volume'ları ölçer ve sıkıştırılmamış boyutu (+%5 ve 512 MiB;
+  bir üst sınır - gzip arşivleri genellikle daha küçüktür) hedef dizindeki boş alanla karşılaştırır. Alan yetersizse
+  hiçbir şey durdurulmadan `insufficient disk space for the Wazuh backup` mesajıyla durur. `wazuh_queue` volume'undaki
+  zafiyet tespit içeriği tek başına birkaç GB'tır. `HORUS_WAZUH_BACKUP_SPACE_CHECK=0` bu kontrolü atlar (risk size aittir).
+- **Ya tam ya hiç.** Arşivler `<dizin>/.wazuh-<zaman damgası>.partial` altına yazılır ve yalnızca tüm volume'lar
+  kopyalanıp doğrulandığında `<dizin>/wazuh-<zaman damgası>` olarak yeniden adlandırılır. Herhangi bir hatada - dolu
+  disk, okuma hatası - yarım dizin silinir, script sıfır olmayan bir kodla çıkar ve durdurulan Wazuh konteynerleri
+  değiştirilmeden yeniden başlatılır - yükseltme sırasında, dağıtım dosyaları zaten yeni Wazuh sürümüne aitse hariç: bu
+  durumda Wazuh durdurulmuş kalır (eski konteynerler yeni yapılandırma dosyalarını okurdu) ve mesaj nasıl devam
+  edileceğini söyler. Manager volume'larındaki Unix soketleri çalışma zamanı uç noktalarıdır ve mesaj vermeden atlanır.
+
+`wazuh-restore.sh` yalnızca aynı Compose projesine ait bir yedeği kabul eder. **Mevcut** checkout'tan çalıştırın (eski
+sürümlerde bu script yoktur): Wazuh'u durdurur, her volume'u boşaltıp yeniden doldurur ve **hiçbir şeyi** başlatmaz.
+Ardından yedeğin alındığı sürümün dağıtım dosyalarına geçin (`MANIFEST` imajlarını listeler) ve o sürümü başlatın -
+daha yeni dosyalarla başlatmak geri yüklenen veriyi yeniden ileriye dönüştürür.
+
+## Paketli Wazuh yükseltmesi
+
+Bir Horus sürümü paketli Wazuh sürümünü değiştirebilir (ör. 4.9.2 → **4.14.8**). Indexer verisi ve manager
+veritabanları ilk başlatmada ileriye doğru dönüştürülür ve **sürüm düşürülemez**; tek geri dönüş yolu öncesinde
+alınmış bir kopyadır. x86_64 ve ARM64'te aynı komutlar:
+
+```bash
+git fetch --tags && git checkout v<yeni sürüm>      # Wazuh yapılandırması dahil yeni dağıtım dosyaları
+jq -r '.version, .backend.digest, .frontend.digest' release-manifest.json
+./scripts/update.sh <sürüm> sha256:<backend> sha256:<frontend>
+```
+
+`update.sh` çalışan `wazuh-manager` imajının yenisinden farklı olduğunu fark eder, önce her yeni imajın platformunu
+kontrol eder ve hiçbir şey başlatılmadan önce `wazuh-backup.sh` çalıştırır. Ardından stack yeni Wazuh ile başlar:
+`wazuh/certs/` altındaki sertifikalar ve parolalar olduğu gibi kalır (sıfırlama yok, varsayılan parola yok). Elle
+`docker compose -f docker-compose.wazuh.yml` ile başlatılmış bir Wazuh benimsenir (`.env` dosyasına `COMPOSE_FILE`
+eklenir) ve `install.sh --with-wazuh` de farklı sürümde çalışan bir Wazuh'u aynı şekilde yedekler.
+
+**Wazuh 4.9.2 → 4.14.8 - dağıtım dosyalarında neler değişir**
+
+- Indexer yapılandırması, güvenlik dosyaları ve sertifikalar `/usr/share/wazuh-indexer/config/` altına bağlanır
+  (`opensearch.yml`, `opensearch-security/internal_users.yml`, `certs/`); `wazuh.indexer.yml` yeni yolları kullanır.
+- `CERT_TOOL_VERSION=4.14` ile sertifika üreticisi `0.0.4` (yalnızca `wazuh/certs/` boşken kullanılır).
+- Manager yapılandırması 4.14 kural setinin `malicious-ioc` listelerini yükler.
+- Manager ve dashboard için sağlık kontrolleri; indexer / manager sağlıklı olduktan sonra başlarlar.
+- `platform: linux/amd64` kaldırıldı - her imaj çok mimarilidir.
+
+Bir Wazuh yükseltmesinden sonra **geri dönüş** (yedekten sonra yazılan veri kaybolur):
+
+```bash
+./scripts/wazuh-restore.sh backups/wazuh-<zaman damgası>   # mevcut checkout'tan; Wazuh durdurulmuş kalır
+git checkout v<önceki sürüm>
+./scripts/rollback.sh             # Horus imajları (yalnızca Wazuh etkileniyorsa docker compose up -d)
+```
+
+Taşınacak verisi olan tek yol, **mevcut 4.9.2 kurulumu olan x86_64 sunucudur**. ARM64'te 4.9.2 verisi yoktur: bu
+imajlar orada hiç çalışmadı (`exec format error`), bu nedenle yükseltme bir ilk kurulumdur.
+
+## Platform kontrolü
+
+`install.sh`, `update.sh` ve `wazuh-init.sh` platformu scripti çalıştıran makineye değil, **Docker daemon'una** sorar
+(`docker version` → `Server.Os/Arch`) - uzak Docker context'leri ve `DOCKER_HOST` çalışır. Ardından seçili Compose
+dosyalarının her imajı kendi registry'sinde (`docker manifest inspect`, paralel olarak) aranır ve bu platformu
+listelemelidir; attestation manifestleri (`unknown/unknown`) sayılmaz. Eksik platform, bilinmeyen tag veya registry
+hatası (giriş, ağ, çekme limiti) scripti hiçbir şey çekilmeden veya değiştirilmeden **önce** durdurur ve etkilenen
+imajları listeler. `--no-pull` ile yerelde bulunan imajlar yerelde kontrol edilir. Emülasyona geri düşme yoktur.
 
 ## init-secrets.sh
 

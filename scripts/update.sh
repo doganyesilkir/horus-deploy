@@ -1,6 +1,10 @@
 #!/bin/sh
 # Controlled update to a new Horus release:
-#   preflight -> pull + signature check -> schema check -> backup -> record current release -> start -> verify
+#   preflight -> platform check -> pull + signature check -> schema check -> backup -> record current release
+#   -> [bundled Wazuh version change: stop Wazuh + volume backup] -> start -> verify
+#
+# Check out the deployment files of the new release first (git checkout v<version>): they carry the image versions of
+# the bundled Wazuh too. The same command works on linux/amd64 and linux/arm64 (multi-arch images, no emulation).
 #
 #   ./scripts/update.sh <version> [<backend digest> <frontend digest>]
 #   e.g. ./scripts/update.sh 1.1.0 sha256:... sha256:...     (digests from the release's release-manifest.json)
@@ -14,9 +18,14 @@ cd "$(dirname "$0")/.."
 NEW_VERSION=${1:?usage: update.sh <version> [<backend digest> <frontend digest>]}
 NEW_BD=${2:-}; NEW_FD=${3:-}
 check_version "$NEW_VERSION"
+wazuh_adopt
 preflight
 new_backend=$(image_ref backend "$NEW_VERSION" "$NEW_BD")
 new_frontend=$(image_ref frontend "$NEW_VERSION" "$NEW_FD")
+# every image of the NEW release (Horus + third-party + bundled Wazuh) must exist for the Docker host's platform
+# shellcheck disable=SC2046  # one image reference per word
+check_platforms $(HORUS_VERSION="$NEW_VERSION" HORUS_BACKEND_DIGEST="$NEW_BD" HORUS_FRONTEND_DIGEST="$NEW_FD" compose_images)
+if wazuh_enabled; then wazuh_preflight; fi
 
 log "pulling $new_backend and $new_frontend"
 docker pull --quiet "$new_backend" >/dev/null
@@ -44,12 +53,16 @@ scripts/backup.sh backups
   running_refs | sed 's/^/  running /'
 } >> "$STATE_FILE"
 
+# a Wazuh version change: stop Wazuh and copy its volumes (the only way back, scripts/wazuh-restore.sh)
+if wazuh_enabled; then wazuh_backup_before_upgrade; fi
+
 env_set HORUS_VERSION "$NEW_VERSION"
 env_set HORUS_BACKEND_DIGEST "$NEW_BD"
 env_set HORUS_FRONTEND_DIGEST "$NEW_FD"
 log "starting the new release (migrations run in the api container)"
 $DC up -d
-if ! wait_healthy 600 || ! scripts/verify.sh; then
+if wazuh_enabled; then timeout=1200; else timeout=600; fi
+if ! wait_healthy "$timeout" || ! scripts/verify.sh; then
   warn "the new release is not healthy. The previous release and backup are recorded in $STATE_FILE"
   die "roll back with: scripts/rollback.sh"
 fi

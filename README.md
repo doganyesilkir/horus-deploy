@@ -102,6 +102,8 @@ it integrates with **Wazuh** for vulnerabilities and alerts and with **Falco** f
 - Package and update visibility, repository management
 - **Configuration drift** and **capacity** tracking
 - Backup verification policies and database restore tests
+- **Domain monitoring**: reachability, response time, 24 h / 7 d / 30 d uptime and TLS certificate expiry of
+  domains and HTTPS addresses, measured from the Horus server ([docs/en/domain-monitoring.md](docs/en/domain-monitoring.md))
 - Jobs, change and maintenance windows, runbooks
 
 **Governance**
@@ -177,10 +179,10 @@ flowchart LR
 
 | Platform | Status | Notes |
 |---|---|---|
-| **Ubuntu / Debian, x86_64** | ✅ Recommended for production | Docker Engine; supports every component, including the bundled Wazuh |
-| **Linux, ARM64** (e.g. Graviton, Ampere) | ✅ Supported | Native arm64 images; the **bundled Wazuh stack is x86_64-only** |
-| **macOS, Intel** | ✅ Evaluation / development | Docker Desktop |
-| **macOS, Apple Silicon** | ✅ Evaluation / development | Docker Desktop; arm64 images are selected automatically |
+| **Ubuntu / Debian, x86_64** | ✅ Recommended for production | Docker Engine; every component, including the bundled Wazuh 4.14.8 |
+| **Linux, ARM64** (e.g. Graviton, Ampere) | ✅ Supported | Native arm64 images for every component, including the bundled Wazuh 4.14.8 |
+| **macOS, Intel** | ✅ Evaluation / development | Docker Desktop; bundled Wazuh not tested there |
+| **macOS, Apple Silicon** | ✅ Evaluation / development | Docker Desktop; arm64 images are selected automatically; bundled Wazuh not tested there |
 | **Windows 10 / 11 (x86_64)** | ✅ Evaluation / development | Docker Desktop + **WSL2**, Linux containers mode; run the scripts inside WSL |
 | **Windows on ARM** | ⚠️ Best effort, not tested | Docker Desktop for Windows on ARM + WSL2 (arm64 images) |
 | **Native Windows containers** | ❌ Not supported | Horus images are Linux containers |
@@ -192,7 +194,7 @@ flowchart LR
 | Shell tools | POSIX `sh`, `git`, `openssl`, `curl`, `awk` (preinstalled on Linux and macOS, available in WSL) |
 
 > [!TIP]
-> **Recommended production setup:** a dedicated Ubuntu 22.04/24.04 LTS or Debian 12 x86_64 VM with 4+ vCPU,
+> **Recommended production setup:** a dedicated Ubuntu 22.04/24.04 LTS or Debian 12 VM (x86_64 or ARM64) with 4+ vCPU,
 > 8+ GB RAM (16 GB with the bundled Wazuh), 50+ GB SSD, a DNS name and a CA-issued TLS certificate.
 
 ---
@@ -213,8 +215,9 @@ cp .env.example .env
 chmod 600 .env
 ${EDITOR:-nano} .env        # set at least HORUS_DOMAIN and HORUS_ADMIN_PASSWORD (see below)
 
-# 3. Install - pulls the images, starts the stack and verifies it
+# 3. Install - checks the platform, pulls the images, starts the stack and verifies it
 ./scripts/install.sh --self-signed     # or without --self-signed when you have a certificate in nginx/certs/
+                                       # add --with-wazuh for the bundled Wazuh (see Wazuh below)
 ```
 
 Then open `https://<HORUS_DOMAIN>/`, sign in as `admin` with `HORUS_ADMIN_PASSWORD` and choose a new password.
@@ -223,6 +226,10 @@ Then open `https://<HORUS_DOMAIN>/`, sign in as `admin` with `HORUS_ADMIN_PASSWO
 
 - **Images are pulled from Docker Hub.** `install.sh` runs `docker compose pull`; you never download images by
   hand. Docker picks the `linux/amd64` or `linux/arm64` variant that matches your host.
+- **The platform is checked first.** Before anything is pulled, the scripts ask the Docker daemon (not the machine
+  running the script, so remote Docker contexts work too) for its platform and check in the registry that **every**
+  image - Horus, the third-party services and the bundled Wazuh - offers it. A missing platform or a registry error
+  stops the installation with the affected images listed; emulation is never used.
 - **Secrets are generated.** Every secret left empty in `.env` (database, Redis, JWT, master key …) is created once
   in the `horus_secrets` Docker volume.
 - **Signatures are verified when `cosign` is installed.** The installer checks both images against the release's
@@ -286,12 +293,17 @@ If that repository is **public**, no login is needed. If you received access to 
 ### Wazuh (optional)
 
 - **External Wazuh:** nothing extra on the Docker host - configure the connection in `.env` or in the UI.
-- **Bundled Wazuh** (`docker-compose.wazuh.yml`): x86_64 Linux only, +8 GB RAM, and on the host:
+- **Bundled Wazuh 4.14.8** (`docker-compose.wazuh.yml`): Linux on x86_64 **or** ARM64 (multi-arch images, same
+  command), +8 GB RAM, outbound HTTPS to `packages.wazuh.com` on the first start (certificate tool), and on the host:
 
   ```bash
   sudo sysctl -w vm.max_map_count=262144
   echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-wazuh.conf
   ```
+
+  Set `WAZUH_INDEXER_PASSWORD`, `WAZUH_API_PASSWORD` and `WAZUH_DASHBOARD_PASSWORD` in `.env`, then install with
+  `./scripts/install.sh --with-wazuh` (also adds Wazuh to an existing installation). Upgrading from an earlier bundled
+  Wazuh: see [docs/en/operations.md](docs/en/operations.md#bundled-wazuh-upgrade).
 
 ---
 
@@ -340,9 +352,8 @@ pulls the one matching your CPU automatically:
 
 You never choose the architecture. The steps are identical to the Ubuntu / Debian section above.
 
-> [!WARNING]
-> The **bundled Wazuh stack** (`docker-compose.wazuh.yml`) is x86_64-only. On ARM64, connect Horus to a Wazuh server
-> running elsewhere instead.
+The **bundled Wazuh** works the same way: Wazuh 4.14.8 and its certificate generator are multi-architecture too, so
+`./scripts/install.sh --with-wazuh` is the same command on x86_64 and ARM64.
 
 ### macOS (Intel)
 
@@ -366,7 +377,8 @@ no extra flags.
 
 > [!NOTE]
 > On macOS, use Horus for evaluation and development. The optional **Falco** profile needs a Linux host kernel and
-> the **bundled Wazuh** stack is x86_64-only, so neither runs under Docker Desktop on a Mac.
+> does not run under Docker Desktop. The **bundled Wazuh** has multi-arch images but is not tested under Docker
+> Desktop on a Mac - use a Linux host for it.
 
 ### Windows 10 / 11
 
@@ -519,14 +531,16 @@ the first error.
 
 | Script | Purpose | When | Example |
 |---|---|---|---|
-| `install.sh` | Preflight, signature check, pull, start, health wait, verify | First installation | `./scripts/install.sh --self-signed` |
-| `update.sh` | Preflight, pull + signature check, schema check, **backup**, record, start, verify | New release | `./scripts/update.sh 1.1.0 sha256:<backend> sha256:<frontend>` |
+| `install.sh` | Preflight, platform check, signature check, pull, start, health wait, verify (`--with-wazuh`: bundled Wazuh) | First installation, adding Wazuh | `./scripts/install.sh --self-signed` |
+| `update.sh` | Preflight, platform check, pull + signature check, schema check, **backup**, record, Wazuh volume backup on a Wazuh version change, start, verify | New release | `./scripts/update.sh 1.1.0 sha256:<backend> sha256:<frontend>` |
 | `rollback.sh` | Return to the release recorded before the last update | An update misbehaves | `./scripts/rollback.sh` |
 | `backup.sh` | Database dump + secrets volume + `.env` into one archive | Regularly, before changes | `./scripts/backup.sh backups` |
 | `restore.sh` | Restore an archive (also on a new host) | Disaster recovery, migration | `./scripts/restore.sh backups/horus-<ts>.tar.gz` |
 | `verify.sh` | Health, HTTPS, HSTS, redirect, container hardening checks | After install / update, any time | `./scripts/verify.sh` |
 | `verify-signatures.sh` | Cosign verification of both configured images | Before install / update | `./scripts/verify-signatures.sh` |
-| `wazuh-init.sh` | Writes the Wazuh indexer user hashes from your `.env` passwords | Once, before the bundled Wazuh | `./scripts/wazuh-init.sh` |
+| `wazuh-init.sh` | Writes the Wazuh indexer user hashes from your `.env` passwords | **Automatic** with `--with-wazuh`; again to [change passwords](docs/en/integrations.md#changing-the-bundled-wazuh-passwords) | `./scripts/wazuh-init.sh` |
+| `wazuh-backup.sh` | Stops the bundled Wazuh and copies all its data volumes | **Automatic** before a Wazuh upgrade; before risky changes | `./scripts/wazuh-backup.sh backups` |
+| `wazuh-restore.sh` | Puts the Wazuh volumes back from such a backup | Going back after a Wazuh upgrade | `./scripts/wazuh-restore.sh backups/wazuh-<ts>` |
 | `init-secrets.sh` | Generates missing secrets into the `horus_secrets` volume | **Automatic** (run by the `horus-init` container) | - |
 
 `scripts/lib.sh` contains the shared helpers and is not run directly. Detailed behaviour and options:
@@ -702,6 +716,10 @@ See also [SECURITY.md](SECURITY.md).
     <td align="center"><img src="docs/images/backups.png" alt="Backups"><br><sub><b>Backups</b> - verification policies and restore tests</sub></td>
   </tr>
   <tr>
+    <td align="center"><img src="docs/images/domain-monitoring.png" alt="Domain monitoring"><br><sub><b>Domain monitoring</b> - status, response time, uptime with coverage, TLS expiry</sub></td>
+    <td align="center"><img src="docs/images/domain-monitoring-detail.png" alt="Domain monitoring detail"><br><sub><b>Monitor detail</b> - response time, certificate, resolved addresses, check history</sub></td>
+  </tr>
+  <tr>
     <td align="center" colspan="2"><img src="docs/images/users-roles.png" alt="Users and roles" width="50%"><br><sub><b>Users & roles</b> - role-based access control</sub></td>
   </tr>
 </table>
@@ -794,8 +812,10 @@ memory, or a full disk.
 <details>
 <summary><b>The bundled Wazuh does not start</b></summary>
 
-Wazuh needs x86_64, `vm.max_map_count=262144`, about 8 GB of extra memory, the three `WAZUH_*_PASSWORD` values in
-`.env` and `./scripts/wazuh-init.sh` run once. Check `docker compose -f docker-compose.wazuh.yml logs wazuh-indexer`.
+Wazuh needs `vm.max_map_count=262144`, about 8 GB of extra memory, the three `WAZUH_*_PASSWORD` values in `.env` and
+outbound HTTPS to `packages.wazuh.com` for the first certificate generation; `install.sh --with-wazuh` checks these.
+`exec format error` means an image of the wrong architecture - Wazuh before 4.14.8 / certificate generator before
+0.0.4 were amd64-only; use the deployment files of this release. Check `docker compose logs wazuh-indexer`.
 </details>
 
 <details>
@@ -820,7 +840,8 @@ evaluation. See the [support matrix](#support-matrix).
 No. `install.sh` and `update.sh` pull them from Docker Hub with `docker compose pull`.
 
 **Does Docker pick the right architecture?**
-Yes. Each tag is a multi-architecture image; Docker selects `linux/amd64` or `linux/arm64` for your host.
+Yes. Each tag is a multi-architecture image; Docker selects `linux/amd64` or `linux/arm64` for your host. This also
+applies to the bundled Wazuh. The scripts check before pulling that every image offers your host's platform.
 
 **Does Horus run on Windows?**
 Yes, through Docker Desktop with WSL2 and Linux containers, with the scripts run inside WSL. Native Windows
@@ -843,7 +864,7 @@ Horus images are Linux containers, and the scripts are POSIX shell scripts that 
 WSL2 provides both and is the backend Docker Desktop uses for Linux containers.
 
 **What do you recommend for production?**
-A dedicated Ubuntu LTS or Debian 12 x86_64 VM, a CA-issued certificate, digest-pinned images with
+A dedicated Ubuntu LTS or Debian 12 VM (x86_64 or ARM64), a CA-issued certificate, digest-pinned images with
 `--require-signature`, regular encrypted off-host backups, and `APPROVAL` mode with four-eyes approvals.
 
 ---
@@ -877,8 +898,9 @@ After the installation:
 1. ✅ **Sign in** as `admin` and set a new password.
 2. 👥 **Create personal accounts** with the right roles and remove `HORUS_ADMIN_PASSWORD` from `.env`.
 3. 🔌 **Configure integrations** - Wazuh, notifications, threat intelligence ([docs/en/integrations.md](docs/en/integrations.md)).
-4. 🖥️ **Add your first server** under **Assets** (SSH address, user and key) and run discovery and a security scan.
-5. 📋 **Review the policies** - operation mode, approvals, baselines; put overrides into [`policies/`](policies/README.md).
-6. 💾 **Take a backup** - `./scripts/backup.sh` - and store it off-host, encrypted.
-7. 🔍 **Run** `./scripts/verify.sh` after every change to the deployment.
+4. 🌐 **Monitor your domains** - add your websites and HTTPS endpoints under **Domain Monitoring** ([docs/en/domain-monitoring.md](docs/en/domain-monitoring.md)).
+5. 🖥️ **Add your first server** under **Assets** (SSH address, user and key) and run discovery and a security scan.
+6. 📋 **Review the policies** - operation mode, approvals, baselines; put overrides into [`policies/`](policies/README.md).
+7. 💾 **Take a backup** - `./scripts/backup.sh` - and store it off-host, encrypted.
+8. 🔍 **Run** `./scripts/verify.sh` after every change to the deployment.
 

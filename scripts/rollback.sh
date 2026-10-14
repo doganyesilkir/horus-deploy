@@ -4,6 +4,10 @@
 #   ./scripts/rollback.sh                 # images only - allowed when the schema did not change
 #   ./scripts/rollback.sh --with-backup   # also restore the pre-update backup (schema changed; data written
 #                                         # after the update is lost)
+#
+# Horus images and database only. A bundled Wazuh upgraded by that update stays on its new version (Wazuh data cannot be
+# downgraded in place); to go back as well, BEFORE this script: scripts/wazuh-restore.sh backups/wazuh-<timestamp>
+# (from the current checkout), then git checkout the previous deployment files.
 set -eu
 cd "$(dirname "$0")/.."
 . scripts/lib.sh
@@ -41,3 +45,6 @@ $DC up -d
 wait_healthy 600 && scripts/verify.sh
 printf '%s rollback to %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$old_backend" >> "$STATE_FILE"
 log "rolled back to $old_backend"
+if wazuh_enabled; then
+  log "bundled Wazuh was not changed by this rollback ($(compose_images | grep '^wazuh/wazuh-manager:' || true))"
+fi

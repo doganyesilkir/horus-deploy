@@ -2,8 +2,8 @@
 
 ← [README'ye dön](../../README.tr.md) · [English](../en/installation-linux.md) | Türkçe
 
-Production için önerilen platform budur. x86_64 üzerinde paketli Wazuh stack'i dahil tüm bileşenler desteklenir.
-ARM64 üzerinde paketli Wazuh dışındaki her şey desteklenir.
+Production için önerilen platform budur. Paketli Wazuh 4.14.8 stack'i dahil tüm bileşenler x86_64 ve ARM64 üzerinde
+aynı komutlarla desteklenir - Docker sunucunuza uyan imaj varyantını çeker.
 
 - [1. Sunucuyu hazırlayın](#1-sunucuyu-hazırlayın)
 - [2. Docker'ı kurun](#2-dockerı-kurun)
@@ -152,10 +152,14 @@ sudo chgrp 101 nginx/certs/privkey.pem     # nginx container'ı uid/gid 101 ile 
 ./scripts/install.sh                       # nginx/certs/ altında sertifika var
 ./scripts/install.sh --self-signed         # geçici kendinden imzalı sertifika
 ./scripts/install.sh --require-signature   # production: imza doğrulanmadan kurulumu reddet
+./scripts/install.sh --with-wazuh          # paketli Wazuh'u da çalıştır (yukarıdaki seçeneklerle birleştirilebilir)
 ```
 
-Kurulum scripti bir ön kontrol çalıştırır, imzaları doğrular (`cosign` yüklüyse), imajları Docker Hub'dan çeker,
-stack'i başlatır, her sağlık kontrolünü bekler ve `scripts/verify.sh`'i çalıştırır.
+Kurulum scripti bir ön kontrol çalıştırır, her imajın Docker sunucusunun platformunu (`linux/amd64` veya
+`linux/arm64`) sunduğunu kontrol eder, imzaları doğrular (`cosign` yüklüyse), imajları Docker Hub'dan çeker, stack'i
+başlatır, her sağlık kontrolünü bekler ve `scripts/verify.sh`'i çalıştırır. `--with-wazuh` için önce
+`vm.max_map_count` ayarını ve üç `WAZUH_*_PASSWORD` değerini girin (bkz.
+[integrations.md](integrations.md#seçenek-b---paketli-tek-düğümlü-wazuh)).
 
 ## 8. Doğrulayın ve giriş yapın
 
@@ -173,8 +177,8 @@ parola belirleyin. [Sonraki adımlar](../../README.tr.md#sonraki-adımlar) ile d
   emülasyon gerekmez.
 - `cosign` ARM64 için de mevcuttur (`cosign-linux-arm64`; yukarıdaki `dpkg --print-architecture` komutu doğru dosyayı
   seçer).
-- **Paketli Wazuh** stack'i (`docker-compose.wazuh.yml`) yalnızca x86_64 imajları kullanır. Bunun yerine Horus'u
-  harici bir Wazuh sunucusuna bağlayın (bkz. [integrations.md](integrations.md)).
+- **Paketli Wazuh 4.14.8** stack'i (`docker-compose.wazuh.yml`) ve sertifika üreticisi de çok mimarilidir:
+  `./scripts/install.sh --with-wazuh` ARM64'te native çalışır (4.14.8 öncesi Wazuh sürümleri yalnızca x86_64 idi).
 - Horus'u sürekli çalışan bir servis olarak işletin: Docker servisi etkin olduğu sürece
   (`sudo systemctl enable docker`) her container yeniden başlatmadan sonra otomatik olarak yeniden başlar
   (`restart: unless-stopped`).

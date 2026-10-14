@@ -4,7 +4,7 @@
 #   cp .env.example .env        # fill in HORUS_IMAGE, HORUS_VERSION, HORUS_ADMIN_PASSWORD, HORUS_DOMAIN
 #   ./scripts/install.sh        # preflight + pull + start + health verification
 #
-# With the bundled Wazuh stack:  docker compose -f docker-compose.wazuh.yml up -d   (see README)
+# With the bundled Wazuh stack:  ./scripts/install.sh --with-wazuh   (sets COMPOSE_FILE in .env; see README)
 #
 # Exposure: only nginx publishes ports (HTTPS 443, HTTP 80 -> redirect). PostgreSQL, Redis, the API, Prometheus
 # and Loki stay on internal Docker networks. Every container runs non-root (except the one-shot secret init, which
@@ -48,6 +48,8 @@ x-backend-env: &backend-env
   HORUS_FORWARDED_ALLOW_IPS: ${HORUS_FORWARDED_ALLOW_IPS:-}
   HORUS_SCHEDULE_TIMEZONE: ${HORUS_SCHEDULE_TIMEZONE:-UTC}
   HORUS_SERVICE_STATUS_INTERVAL_SECONDS: ${HORUS_SERVICE_STATUS_INTERVAL_SECONDS:-60}
+  HORUS_MONITOR_CONCURRENCY: ${HORUS_MONITOR_CONCURRENCY:-8}
+  HORUS_MONITOR_RETENTION_DAYS: ${HORUS_MONITOR_RETENTION_DAYS:-90}
   HORUS_LOKI_URL: http://loki:3100
   HORUS_FALCO_INGEST_URL: ${HORUS_FALCO_INGEST_URL:-}
   HORUS_FIREWALL_ROLLBACK_TIMEOUT: ${HORUS_FIREWALL_ROLLBACK_TIMEOUT:-120}
